@@ -1,0 +1,16 @@
+# OS / 編輯器
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# Node（本專案零依賴，但保險起見）
+node_modules/
+npm-debug.log*
+
+# 暫存
+*.tmp
+*.log
+scratchpad/
