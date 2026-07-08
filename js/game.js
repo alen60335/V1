@@ -65,6 +65,7 @@ const player = {
   x: 0, y: 0, w: 18, h: 40, vx: 0, vy: 0, facing: 1, grounded: false,
   hp: 100, maxHp: 100, mp: 100, maxMp: 100,
   slots: 3, breakSlots: 3,
+  unlocked: new Set(['fire']),
   seq: [], breakSeq: [], channel: null,
   iframes: 0, coyote: 0, jumpBuf: 0,
   dashT: 0, dashDir: 1, dashDmg: 0, dashHit: null, ghostT: 0,
@@ -157,7 +158,7 @@ function initWorld() {
   checkpoints = L.spawns.checkpoints.map(c => ({ x: c.x * TILE, y: c.floor * TILE, lit: false }));
   signs = L.spawns.signs.map(s => ({ x: s.x * TILE + 16, y: s.floor * TILE, text: s.text }));
   goal = { x: L.spawns.goal.x * TILE, y: L.spawns.goal.floor * TILE };
-  pickups = L.spawns.pickups.map((p, i) => ({ id: 'p' + i, type: p.type, x: p.x * TILE + 16, y: p.floor * TILE - 22, vy: 0, bob: Math.random() * 6 }))
+  pickups = L.spawns.pickups.map((p, i) => ({ id: 'p' + i, type: p.type, elem: p.elem || null, x: p.x * TILE + 16, y: p.floor * TILE - 22, vy: 0, bob: Math.random() * 6 }))
     .filter(p => !collected.has(p.id));
   const ps = L.spawns.player;
   player.x = ps.x * TILE + 7; player.y = ps.floor * TILE - player.h;
@@ -180,6 +181,7 @@ function respawn() {
 // ---------------- 輸入 ----------------
 const keys = {};
 const KEY_ELEM = { Digit1: 'fire', Digit2: 'water', Digit3: 'wind', Digit4: 'earth', Numpad1: 'fire', Numpad2: 'water', Numpad3: 'wind', Numpad4: 'earth' };
+const ELEM_NUM = { fire: 1, water: 2, wind: 3, earth: 4 };
 window.addEventListener('keydown', (e) => {
   if (['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Backspace'].includes(e.code) || e.code.startsWith('Digit')) e.preventDefault();
   if (e.repeat) { keys[e.code] = true; return; }
@@ -208,6 +210,7 @@ window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
 // ---------------- 佈陣（施放序列） ----------------
 function appendCast(elem) {
+  if (!player.unlocked.has(elem)) { snd.bad(); pushMsg('尚未習得「' + F.INFO[elem].name + '」之靈印', 1.5); return; }
   if (player.channel) { pushMsg('起陣中，無法再輸入', 1.2); return; }
   if (player.seq.length >= player.slots) { snd.bad(); pushMsg('陣槽已滿（' + player.slots + ' 格）', 1.5); return; }
   const err = F.checkAppend(player.seq, elem);
@@ -289,6 +292,7 @@ function castEffect(ana) {
 
 // ---------------- 破陣 ----------------
 function appendBreak(elem) {
+  if (!player.unlocked.has(elem)) { snd.bad(); pushMsg('尚未習得「' + F.INFO[elem].name + '」之靈印', 1.5); return; }
   if (player.breakSeq.length >= player.breakSlots) { snd.bad(); pushMsg('破陣槽已滿（' + player.breakSlots + ' 格）', 1.5); return; }
   const err = F.checkAppend(player.breakSeq, elem);
   if (err) { snd.bad(); pushMsg('破陣序列：' + err, 1.6); return; }
@@ -526,6 +530,12 @@ function updatePlayer(dt) {
     if (dist2(p.x, p.y, cx(player), cy(player)) < 30 * 30) {
       p.taken = true;
       if (p.type === 'slot') { player.slots++; player.breakSlots++; snd.pickup(); pushMsg('陣槽玉！施放／破陣槽 +1（現在 ' + player.slots + ' 格）', 3); if (p.id) collected.add(p.id); }
+      else if (p.type === 'elem') {
+        player.unlocked.add(p.elem); snd.pickup();
+        pushMsg('習得「' + F.INFO[p.elem].name + '」之靈印！按 ' + ELEM_NUM[p.elem] + ' 輸入' + F.INFO[p.elem].name + '元素', 3.5);
+        burst(p.x, p.y, F.INFO[p.elem].color, 26, 180, 0.8);
+        if (p.id) collected.add(p.id);
+      }
       else if (p.type === 'mana') { player.maxMp += 30; player.mp = player.maxMp; snd.pickup(); pushMsg('靈力玉！靈力上限 +30', 3); if (p.id) collected.add(p.id); }
       else { player.mp = clamp(player.mp + 25, 0, player.maxMp); beep(700, 0.1, 'sine', 0.08, 150); }
       burst(p.x, p.y, '#9fe8ff', 14, 130, 0.6);
@@ -841,6 +851,18 @@ function drawSignsPickupsGoal() {
     if (p.type === 'manaOrb') {
       ctx.fillStyle = '#57c8ff';
       ctx.beginPath(); ctx.arc(sx, sy, 5, 0, Math.PI * 2); ctx.fill();
+    } else if (p.type === 'elem') {
+      const info = F.INFO[p.elem];
+      ctx.save(); ctx.translate(sx, sy); ctx.rotate(globalT * 1.2);
+      ctx.strokeStyle = info.color; ctx.lineWidth = 2;
+      ctx.strokeRect(-12, -12, 24, 24);
+      ctx.restore();
+      drawGlyph(p.elem, sx, sy, 10);
+      ctx.fillStyle = info.glow;
+      ctx.save();
+      ctx.globalAlpha = 0.18 + 0.08 * Math.sin(globalT * 4 + p.bob);
+      ctx.beginPath(); ctx.arc(sx, sy, 20 + Math.sin(globalT * 4) * 3, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
     } else {
       const col = p.type === 'slot' ? '#9fe8ff' : '#5f8dff';
       ctx.save(); ctx.translate(sx, sy); ctx.rotate(globalT * 1.5);
@@ -1030,6 +1052,20 @@ function drawBar(x, y, w, h, ratio, col, label) {
 function drawHud() {
   drawBar(16, 14, 190, 14, player.hp / player.maxHp, '#e0445c', '生命 ' + Math.ceil(player.hp));
   drawBar(16, 32, 190, 11, player.mp / player.maxMp, '#4a7dde', '靈力 ' + Math.floor(player.mp));
+  // 已習得靈印
+  F.ELEMENTS.forEach((el, i) => {
+    const x = 27 + i * 24, y = 58;
+    if (player.unlocked.has(el)) drawGlyph(el, x, y, 9);
+    else {
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(174,184,232,0.35)'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = 'rgba(174,184,232,0.5)';
+      ctx.font = '10px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('？', x, y + 1);
+      ctx.textBaseline = 'alphabetic';
+    }
+  });
   ctx.fillStyle = 'rgba(230,236,255,0.75)';
   ctx.font = '12px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'right';
   ctx.fillText('Tab 陣式表　P 暫停　M 靜音', VW - 14, 22);
@@ -1037,7 +1073,8 @@ function drawHud() {
   // 施放序列（左下）
   ctx.textAlign = 'left';
   ctx.fillStyle = '#aeb8e8';
-  ctx.fillText('施放陣列（1火 2水 3風 4土 → Enter 起陣）', 16, VH - 58);
+  const keyHint = F.ELEMENTS.filter(e => player.unlocked.has(e)).map(e => ELEM_NUM[e] + F.INFO[e].name).join(' ');
+  ctx.fillText('施放陣列（' + keyHint + ' → Enter 起陣）', 16, VH - 58);
   for (let i = 0; i < player.slots; i++) {
     const x = 26 + i * 32, y = VH - 34;
     if (i < player.seq.length) drawGlyph(player.seq[i], x, y, 12);
@@ -1147,6 +1184,7 @@ function drawScreens() {
       '佈陣：1火 2水 3風 4土 輸入元素，Enter 起陣',
       '破陣：Shift+數字 輸入克制序列，Shift+Enter 發動',
       'Tab 陣式表　Backspace 撤銷輸入',
+      '你僅攜有「火」之靈印——其餘元素散落於洞窟中，尋回以習得',
     ];
     lines.forEach((ln, i) => ctx.fillText(ln, VW / 2, 270 + i * 28));
     ctx.fillStyle = '#ffe9b0';
