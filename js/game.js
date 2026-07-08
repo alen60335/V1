@@ -44,6 +44,13 @@ const snd = {
   boom: () => beep(90, 0.35, 'sawtooth', 0.18, -50),
 };
 
+// ---------------- 生成素材（可選，缺檔自動退回程式化繪製） ----------------
+const bgImg = new Image();
+let bgReady = false;
+bgImg.onload = () => { bgReady = true; };
+bgImg.onerror = () => { bgReady = false; };
+bgImg.src = 'assets/bg_cave.png';
+
 // ---------------- 小工具 ----------------
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const dist2 = (ax, ay, bx, by) => { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; };
@@ -719,23 +726,34 @@ function drawFormationCircle(fx, fy, rad, seq, shown, rot, prog, backlash, alpha
   }
 }
 function drawBackground() {
-  const g = ctx.createLinearGradient(0, 0, 0, VH);
-  g.addColorStop(0, '#171430'); g.addColorStop(0.6, '#100e1f'); g.addColorStop(1, '#0b0a14');
-  ctx.fillStyle = g; ctx.fillRect(0, 0, VW, VH);
-  // 遠景鐘乳石與石丘（兩層視差）
-  for (let layer = 0; layer < 2; layer++) {
-    const par = layer === 0 ? 0.25 : 0.5;
-    ctx.fillStyle = layer === 0 ? '#1c1936' : '#242044';
-    const off = cam.x * par;
-    for (let i = -1; i < 16; i++) {
-      const wx = Math.floor((off + i * 90) / 90);
-      const sx = wx * 90 - off;
-      const h1 = 60 + hash(wx, layer) * 150;
-      ctx.beginPath();
-      ctx.moveTo(sx, 0); ctx.lineTo(sx + 45, h1); ctx.lineTo(sx + 90, 0); ctx.closePath(); ctx.fill();
-      const h2 = 60 + hash(wx, layer + 7) * 170;
-      ctx.beginPath();
-      ctx.moveTo(sx, VH); ctx.lineTo(sx + 45, VH - h2); ctx.lineTo(sx + 90, VH); ctx.closePath(); ctx.fill();
+  if (bgReady) {
+    // 生成背景：橫向視差捲動（左右平鋪），上壓暗色漸層保持前景可讀
+    const scale = VH / bgImg.height;
+    const w = Math.ceil(bgImg.width * scale);
+    const off = ((cam.x * 0.22) % w + w) % w;
+    for (let x = -off; x < VW; x += w) ctx.drawImage(bgImg, x, 0, w, VH);
+    const g = ctx.createLinearGradient(0, 0, 0, VH);
+    g.addColorStop(0, 'rgba(16,14,31,0.22)'); g.addColorStop(1, 'rgba(11,10,20,0.62)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, VW, VH);
+  } else {
+    const g = ctx.createLinearGradient(0, 0, 0, VH);
+    g.addColorStop(0, '#171430'); g.addColorStop(0.6, '#100e1f'); g.addColorStop(1, '#0b0a14');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, VW, VH);
+    // 遠景鐘乳石與石丘（兩層視差）
+    for (let layer = 0; layer < 2; layer++) {
+      const par = layer === 0 ? 0.25 : 0.5;
+      ctx.fillStyle = layer === 0 ? '#1c1936' : '#242044';
+      const off = cam.x * par;
+      for (let i = -1; i < 16; i++) {
+        const wx = Math.floor((off + i * 90) / 90);
+        const sx = wx * 90 - off;
+        const h1 = 60 + hash(wx, layer) * 150;
+        ctx.beginPath();
+        ctx.moveTo(sx, 0); ctx.lineTo(sx + 45, h1); ctx.lineTo(sx + 90, 0); ctx.closePath(); ctx.fill();
+        const h2 = 60 + hash(wx, layer + 7) * 170;
+        ctx.beginPath();
+        ctx.moveTo(sx, VH); ctx.lineTo(sx + 45, VH - h2); ctx.lineTo(sx + 90, VH); ctx.closePath(); ctx.fill();
+      }
     }
   }
   // 漂浮塵光
@@ -1412,7 +1430,8 @@ function render() {
 let lastTime = performance.now();
 let manualStep = false; // 除錯：手動推進影格時停用 rAF 排程
 function frame(now) {
-  const dt = Math.min(0.033, (now - lastTime) / 1000);
+  // dt 夾在 [0, 0.033]：時鐘倒退（分頁切換、手動推進與 rAF 交錯）會產生負 dt，導致重力反轉與穿牆
+  const dt = Math.min(0.033, Math.max(0, (now - lastTime) / 1000));
   lastTime = now;
   globalT += dt;
   if (state === 'play' && !paused && !overlayOpen) {
