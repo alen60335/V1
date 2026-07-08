@@ -1034,89 +1034,239 @@ function drawSignPanels() {
     const w = 390, h = lines.length * 20 + 18;
     let px = clamp(s.x - cam.x - w / 2, 8, VW - w - 8);
     let py = clamp(s.y - cam.y - 60 - h, 8, VH - h - 8);
-    ctx.fillStyle = 'rgba(12,10,24,0.88)';
-    ctx.strokeStyle = '#57cfae';
-    ctx.lineWidth = 1;
-    ctx.fillRect(px, py, w, h); ctx.strokeRect(px, py, w, h);
-    ctx.fillStyle = '#dfe6ff'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    lines.forEach((ln, i) => ctx.fillText(ln, px + 14, py + 10 + i * 20));
+    inkPanel(px, py, w, h);
+    ctx.fillStyle = UI.gold; ctx.fillRect(px + 7, py + 7, 2, h - 14);
+    ctx.fillStyle = '#e8dfca'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    lines.forEach((ln, i) => ctx.fillText(ln, px + 16, py + 10 + i * 20));
   }
   ctx.textBaseline = 'alphabetic';
 }
-function drawBar(x, y, w, h, ratio, col, label) {
-  ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(x, y, w, h);
-  ctx.fillStyle = col; ctx.fillRect(x + 1, y + 1, (w - 2) * clamp(ratio, 0, 1), h - 2);
-  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.strokeRect(x + 0.5, y + 0.5, w, h);
-  if (label) { ctx.fillStyle = '#fff'; ctx.font = '11px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'left'; ctx.fillText(label, x + 4, y + h - 3); }
+// ---------------- UI 風格（墨紙＋朱砂；布局參考空洞騎士、視覺參考九日） ----------------
+const UI = {
+  bone: '#e6dcc4', boneDim: 'rgba(230,220,196,0.62)', boneFaint: 'rgba(230,220,196,0.32)',
+  ink: 'rgba(11,9,17,0.88)', cinnabar: '#c93a32', cinnabarHi: '#e8564a', gold: '#d9a441',
+};
+function brushLine(x, y, w) {
+  ctx.save();
+  ctx.fillStyle = UI.boneFaint;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.quadraticCurveTo(x + w * 0.5, y - 2.6, x + w, y - 0.6);
+  ctx.quadraticCurveTo(x + w * 0.55, y + 2.2, x, y + 0.9);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+function inkSlot(x, y, r) {
+  ctx.fillStyle = 'rgba(10,8,16,0.5)';
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  ctx.lineWidth = 1.6; ctx.strokeStyle = UI.boneFaint;
+  ctx.beginPath(); ctx.arc(x, y, r, 0.35, Math.PI * 1.8); ctx.stroke();
+  ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(230,220,196,0.16)';
+  ctx.beginPath(); ctx.arc(x, y, r - 2.5, Math.PI * 0.9, Math.PI * 2.5); ctx.stroke();
+}
+function inkPanel(x, y, w, h) {
+  ctx.fillStyle = UI.ink;
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = UI.boneFaint; ctx.lineWidth = 1;
+  ctx.strokeRect(x + 3.5, y + 3.5, w - 7, h - 7);
+  ctx.strokeStyle = 'rgba(230,220,196,0.14)';
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  ctx.strokeStyle = UI.gold; ctx.lineWidth = 1;
+  const c = 7;
+  [[x + 3.5, y + 3.5, 1, 1], [x + w - 3.5, y + 3.5, -1, 1], [x + 3.5, y + h - 3.5, 1, -1], [x + w - 3.5, y + h - 3.5, -1, -1]]
+    .forEach(([kx, ky, dx, dy]) => {
+      ctx.beginPath(); ctx.moveTo(kx + dx * c, ky); ctx.lineTo(kx, ky); ctx.lineTo(kx, ky + dy * c); ctx.stroke();
+    });
+}
+function sealStamp(x, y, s, chars) {
+  ctx.save();
+  ctx.globalAlpha = 0.92;
+  ctx.fillStyle = UI.cinnabar;
+  ctx.fillRect(x - s / 2, y - s / 2, s, s);
+  ctx.strokeStyle = 'rgba(255,235,220,0.55)'; ctx.lineWidth = 1;
+  ctx.strokeRect(x - s / 2 + 1.5, y - s / 2 + 1.5, s - 3, s - 3);
+  ctx.fillStyle = '#f4e8d8';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (chars.length === 1) {
+    ctx.font = 'bold ' + Math.round(s * 0.62) + 'px "Microsoft JhengHei", serif';
+    ctx.fillText(chars, x, y + 0.5);
+  } else {
+    ctx.font = 'bold ' + Math.round(s * 0.42) + 'px "Microsoft JhengHei", serif';
+    ctx.fillText(chars[0], x, y - s * 0.21);
+    ctx.fillText(chars[1], x, y + s * 0.24);
+  }
+  ctx.textBaseline = 'alphabetic';
+  ctx.restore();
+}
+function ensoRing(x, y, r, col, alpha) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(-0.5);
+  ctx.strokeStyle = col; ctx.globalAlpha = alpha; ctx.lineCap = 'round';
+  ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.arc(0, 0, r, 0.2, Math.PI * 1.94); ctx.stroke();
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(0, 0, r - 4, 0.55, Math.PI * 1.7); ctx.stroke();
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(0, 0, r + 5, 1.1, Math.PI * 1.5); ctx.stroke();
+  ctx.restore();
+}
+function drawSoulOrb(x, y, r) {
+  const ratio = clamp(player.mp / player.maxMp, 0, 1);
+  ctx.save();
+  ctx.fillStyle = 'rgba(8,6,14,0.82)';
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  // 靈力液面（波動）
+  ctx.beginPath(); ctx.arc(x, y, r - 3, 0, Math.PI * 2); ctx.clip();
+  const lvl = y + (r - 3) - ratio * (r - 3) * 2;
+  ctx.fillStyle = '#3d6fd6';
+  ctx.beginPath();
+  ctx.moveTo(x - r, y + r);
+  ctx.lineTo(x - r, lvl);
+  for (let i = -r; i <= r; i += 3) ctx.lineTo(x + i, lvl + Math.sin(globalT * 2.4 + i * 0.3) * 1.5);
+  ctx.lineTo(x + r, y + r);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = 'rgba(140,200,255,0.3)';
+  ctx.fillRect(x - r, lvl - 1, r * 2, 2.5);
+  ctx.restore();
+  // 外環墨圈＋緩轉刻度（呼應陣法圈）
+  ctx.strokeStyle = UI.boneDim; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = 'rgba(230,220,196,0.25)'; ctx.lineWidth = 1;
+  for (let i = 0; i < 8; i++) {
+    const a = globalT * 0.25 + i * Math.PI / 4;
+    ctx.beginPath();
+    ctx.moveTo(x + Math.cos(a) * (r + 3), y + Math.sin(a) * (r + 3));
+    ctx.lineTo(x + Math.cos(a) * (r + 6), y + Math.sin(a) * (r + 6));
+    ctx.stroke();
+  }
+  if (ratio > 0.995) {
+    ctx.fillStyle = 'rgba(120,180,255,' + (0.1 + 0.06 * Math.sin(globalT * 3)).toFixed(3) + ')';
+    ctx.beginPath(); ctx.arc(x, y, r + 9, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.fillStyle = UI.boneDim;
+  ctx.font = '10px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(Math.floor(player.mp), x, y + r + 13);
+}
+function drawLifeBeads(x0, y) {
+  const per = 20, n = Math.ceil(player.maxHp / per);
+  const hurt = player.iframes > 0.6 && Math.floor(globalT * 12) % 2 === 0;
+  const low = player.hp <= per;
+  for (let i = 0; i < n; i++) {
+    const x = x0 + i * 23;
+    const amt = clamp(player.hp / per - i, 0, 1);
+    ctx.fillStyle = 'rgba(8,6,14,0.7)';
+    ctx.beginPath(); ctx.ellipse(x, y, 7.5, 9, 0, 0, Math.PI * 2); ctx.fill();
+    if (amt > 0) {
+      ctx.save();
+      ctx.beginPath(); ctx.ellipse(x, y, 6, 7.5, 0, 0, Math.PI * 2); ctx.clip();
+      ctx.fillStyle = hurt ? UI.cinnabarHi : (low ? '#d8756a' : '#efe6cf');
+      if (low && !hurt) ctx.globalAlpha = 0.7 + 0.3 * Math.sin(globalT * 6);
+      ctx.fillRect(x - 8, y + 8 - amt * 16, 16, amt * 16 + 1);
+      ctx.restore();
+    }
+    ctx.strokeStyle = amt > 0 ? UI.boneDim : 'rgba(230,220,196,0.28)';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.ellipse(x, y, 7.5, 9, 0, 0, Math.PI * 2); ctx.stroke();
+  }
+}
+function drawSealTag(x, y, el) {
+  const un = player.unlocked.has(el);
+  const w = 15, h = 22;
+  ctx.strokeStyle = un ? 'rgba(201,58,50,0.75)' : 'rgba(150,140,150,0.3)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x, y - h / 2 - 4); ctx.lineTo(x, y - h / 2); ctx.stroke();
+  // 符紙（底部收尖）
+  ctx.fillStyle = un ? '#e0d3b2' : 'rgba(18,14,26,0.75)';
+  ctx.beginPath();
+  ctx.moveTo(x - w / 2, y - h / 2);
+  ctx.lineTo(x + w / 2, y - h / 2);
+  ctx.lineTo(x + w / 2, y + h / 2 - 4);
+  ctx.lineTo(x, y + h / 2);
+  ctx.lineTo(x - w / 2, y + h / 2 - 4);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = un ? 'rgba(201,58,50,0.85)' : 'rgba(230,220,196,0.2)';
+  ctx.stroke();
+  if (un) drawGlyph(el, x, y - 1, 6);
+  else {
+    ctx.fillStyle = 'rgba(230,220,196,0.4)';
+    ctx.font = '10px "Microsoft JhengHei", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('？', x, y);
+    ctx.textBaseline = 'alphabetic';
+  }
 }
 function drawHud() {
-  drawBar(16, 14, 190, 14, player.hp / player.maxHp, '#e0445c', '生命 ' + Math.ceil(player.hp));
-  drawBar(16, 32, 190, 11, player.mp / player.maxMp, '#4a7dde', '靈力 ' + Math.floor(player.mp));
-  // 已習得靈印
-  F.ELEMENTS.forEach((el, i) => {
-    const x = 27 + i * 24, y = 58;
-    if (player.unlocked.has(el)) drawGlyph(el, x, y, 9);
-    else {
-      ctx.fillStyle = 'rgba(0,0,0,0.45)';
-      ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = 'rgba(174,184,232,0.35)'; ctx.lineWidth = 1; ctx.stroke();
-      ctx.fillStyle = 'rgba(174,184,232,0.5)';
-      ctx.font = '10px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText('？', x, y + 1);
-      ctx.textBaseline = 'alphabetic';
-    }
-  });
-  ctx.fillStyle = 'rgba(230,236,255,0.75)';
+  // 左上：靈力主珠＋命玉排（空洞騎士式布局）＋靈印符牌
+  drawSoulOrb(42, 42, 23);
+  drawLifeBeads(86, 30);
+  F.ELEMENTS.forEach((el, i) => drawSealTag(84 + i * 21, 64, el));
+  ctx.fillStyle = UI.boneDim;
   ctx.font = '12px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'right';
   ctx.fillText('Tab 陣式表　P 暫停　M 靜音', VW - 14, 22);
 
   // 施放序列（左下）
   ctx.textAlign = 'left';
-  ctx.fillStyle = '#aeb8e8';
+  ctx.fillStyle = UI.boneDim;
   const keyHint = F.ELEMENTS.filter(e => player.unlocked.has(e)).map(e => ELEM_NUM[e] + F.INFO[e].name).join(' ');
   ctx.fillText('施放陣列（' + keyHint + ' → Enter 起陣）', 16, VH - 58);
   for (let i = 0; i < player.slots; i++) {
     const x = 26 + i * 32, y = VH - 34;
     if (i < player.seq.length) drawGlyph(player.seq[i], x, y, 12);
-    else { ctx.strokeStyle = 'rgba(174,184,232,0.4)'; ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.stroke(); }
+    else inkSlot(x, y, 12);
   }
+  brushLine(12, VH - 16, player.slots * 32 + 8);
   if (player.channel) {
     const ch = player.channel;
-    drawBar(16, VH - 16, player.slots * 32, 6, ch.t / ch.total, '#cfd6ff');
-    ctx.fillStyle = '#cfd6ff'; ctx.fillText('施展窗口…', 16 + player.slots * 32 + 8, VH - 10);
+    ctx.fillStyle = UI.cinnabarHi;
+    ctx.fillRect(14, VH - 12, player.slots * 32 * clamp(ch.t / ch.total, 0, 1), 3);
+    ctx.fillStyle = UI.boneDim; ctx.fillText('施展窗口…', 16 + player.slots * 32 + 8, VH - 8);
   }
   // 破陣序列（右下）
   ctx.textAlign = 'right';
-  ctx.fillStyle = '#aeb8e8';
+  ctx.fillStyle = UI.boneDim;
   ctx.fillText('破陣序列（Shift+鍵 → Shift+Enter）', VW - 16, VH - 58);
   for (let i = 0; i < player.breakSlots; i++) {
     const x = VW - 26 - (player.breakSlots - 1 - i) * 32, y = VH - 34;
     if (i < player.breakSeq.length) drawGlyph(player.breakSeq[i], x, y, 12);
-    else { ctx.strokeStyle = 'rgba(174,184,232,0.4)'; ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.stroke(); }
+    else inkSlot(x, y, 12);
   }
-  // 頭目血條
+  brushLine(VW - 20 - player.breakSlots * 32, VH - 16, player.breakSlots * 32 + 8);
+  // 頭目血條（下方居中，九日式名牌）
   if (bossAggro && bossRef && !bossRef.dead) {
-    drawBar(VW / 2 - 180, 20, 360, 13, bossRef.hp / bossRef.maxHp, '#a050e0', '深陣咒主');
+    const bw = 380, bx = (VW - bw) / 2, by = VH - 46;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = UI.bone;
+    ctx.font = 'bold 14px "Microsoft JhengHei", sans-serif';
+    ctx.fillText('深 陣 咒 主', VW / 2, by - 8);
+    [[-1, VW / 2 - 60], [1, VW / 2 + 60]].forEach(([d, sx]) => {
+      ctx.strokeStyle = UI.boneFaint; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(sx, by - 12); ctx.lineTo(sx + d * 52, by - 12); ctx.stroke();
+      ctx.fillStyle = UI.cinnabar;
+      ctx.save(); ctx.translate(sx + d * 56, by - 12); ctx.rotate(Math.PI / 4); ctx.fillRect(-2.6, -2.6, 5.2, 5.2); ctx.restore();
+    });
+    ctx.fillStyle = 'rgba(8,6,14,0.78)'; ctx.fillRect(bx, by, bw, 8);
+    ctx.fillStyle = UI.cinnabar;
+    ctx.fillRect(bx + 1, by + 1, (bw - 2) * clamp(bossRef.hp / bossRef.maxHp, 0, 1), 6);
+    ctx.strokeStyle = UI.boneFaint; ctx.lineWidth = 1; ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, 8);
   }
-  // 訊息
-  ctx.textAlign = 'center';
+  // 訊息（墨紙短箋＋朱點）
   ctx.font = '15px "Microsoft JhengHei", sans-serif';
   messages.forEach((m, i) => {
+    const w = ctx.measureText(m.text).width + 38;
+    const mx = VW / 2 - w / 2, my = VH - 136 - i * 28;
     ctx.globalAlpha = clamp(m.t / 0.4, 0, 1);
-    ctx.fillStyle = '#0c0a18';
-    const w = ctx.measureText(m.text).width + 24;
-    ctx.fillRect(VW / 2 - w / 2, VH - 120 - i * 28, w, 24);
-    ctx.fillStyle = '#ffe9b0';
-    ctx.fillText(m.text, VW / 2, VH - 103 - i * 28);
+    ctx.fillStyle = UI.ink; ctx.fillRect(mx, my, w, 24);
+    ctx.strokeStyle = UI.boneFaint; ctx.lineWidth = 1; ctx.strokeRect(mx + 0.5, my + 0.5, w - 1, 23);
+    ctx.fillStyle = UI.cinnabar; ctx.fillRect(mx + 7, my + 8, 8, 8);
+    ctx.fillStyle = '#efe6cf';
+    ctx.textAlign = 'left'; ctx.fillText(m.text, mx + 22, my + 17);
     ctx.globalAlpha = 1;
   });
 }
 function drawOverlay() {
-  ctx.fillStyle = 'rgba(8,7,18,0.92)';
-  ctx.fillRect(40, 30, VW - 80, VH - 60);
-  ctx.strokeStyle = '#57cfae'; ctx.strokeRect(40.5, 30.5, VW - 80, VH - 60);
+  inkPanel(40, 30, VW - 80, VH - 60);
+  sealStamp(VW - 76, 64, 28, '陣式');
   ctx.textAlign = 'left';
-  ctx.fillStyle = '#9fe8ff';
+  ctx.fillStyle = UI.bone;
   ctx.font = 'bold 18px "Microsoft JhengHei", sans-serif';
   ctx.fillText('陣式總覽（Tab 關閉）', 64, 62);
   ctx.font = '14px "Microsoft JhengHei", sans-serif';
@@ -1170,8 +1320,10 @@ function drawOverlay() {
 function drawScreens() {
   if (state === 'title') {
     ctx.fillStyle = 'rgba(8,7,18,0.85)'; ctx.fillRect(0, 0, VW, VH);
+    ensoRing(VW / 2, 160, 96, UI.cinnabar, 0.4);
+    sealStamp(VW / 2 + 170, 196, 30, '環陣');
     ctx.textAlign = 'center';
-    ctx.fillStyle = '#9fe8ff';
+    ctx.fillStyle = UI.bone;
     ctx.font = 'bold 52px "Microsoft JhengHei", sans-serif';
     ctx.fillText('環 陣 行 者', VW / 2, 170);
     ctx.fillStyle = '#57cfae';
@@ -1195,6 +1347,7 @@ function drawScreens() {
     els.forEach((el, i) => drawGlyph(el, VW / 2 - 75 + i * 50, 470, 16));
   } else if (state === 'dead') {
     ctx.fillStyle = 'rgba(20,4,10,0.6)'; ctx.fillRect(0, 0, VW, VH);
+    ensoRing(VW / 2, VH / 2 - 32, 76, '#8a2a24', 0.55);
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ff9db0';
     ctx.font = 'bold 40px "Microsoft JhengHei", sans-serif';
@@ -1204,6 +1357,7 @@ function drawScreens() {
     ctx.fillText('按 R 於祭壇重生', VW / 2, VH / 2 + 24);
   } else if (state === 'victory') {
     ctx.fillStyle = 'rgba(8,7,18,0.8)'; ctx.fillRect(0, 0, VW, VH);
+    ensoRing(VW / 2, VH / 2 - 42, 86, UI.gold, 0.5);
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffe08a';
     ctx.font = 'bold 44px "Microsoft JhengHei", sans-serif';
