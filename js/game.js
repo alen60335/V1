@@ -53,7 +53,14 @@ const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h 
 
 // ---------------- 世界狀態 ----------------
 let state = 'title'; // title | play | dead | victory
-let paused = false, overlayOpen = false;
+let paused = false, overlayOpen = false, mapOpen = false;
+const explored = new Set(); // 已探索區塊（6x6 格為一塊）
+const CHUNK = 6;
+function markExplored() {
+  const ctx2 = Math.floor(cx(player) / TILE / CHUNK), cty = Math.floor(cy(player) / TILE / CHUNK);
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -2; dx <= 2; dx++) explored.add((ctx2 + dx) + ',' + (cty + dy));
+}
+const exploredAt = (tx, ty) => explored.has(Math.floor(tx / CHUNK) + ',' + Math.floor(ty / CHUNK));
 let playTime = 0, shakeT = 0, shakeMag = 0, globalT = 0, bossIntroT = 0, goalMsgT = -9;
 let cam = { x: 0, y: 0 };
 let enemies = [], projectiles = [], zones = [], traps = [], blasts = [], particles = [], pickups = [], messages = [];
@@ -147,6 +154,17 @@ function makeCaster(d) {
     pool: d.pool, buildSpd: 0.5, healer: !!d.healer, elite: !!d.elite,
     flash: 0, burn: null, dead: false, animT: Math.random() * 9 };
 }
+function makeThorn(d) {
+  return { kind: 'thorn', x: d.x * TILE + 4, y: d.floor * TILE - 30, w: 24, h: 30, vx: 0, vy: 0,
+    hp: 35, maxHp: 35, touchDmg: 8, shootCd: 1 + Math.random() * 1.5, shotFlash: 0,
+    flash: 0, burn: null, dead: false, animT: Math.random() * 9 };
+}
+function makeBomber(d) {
+  const px = d.x * TILE, py = d.y * TILE;
+  return { kind: 'bomber', x: px, y: py, w: 18, h: 16, vx: 0, vy: 0, homeX: px + 9, homeY: py + 8,
+    hp: 14, maxHp: 14, touchDmg: 0, fuse: -1, t: Math.random() * 9,
+    flash: 0, burn: null, dead: false, animT: Math.random() * 9 };
+}
 function makeFlyer(d) {
   const px = d.x * TILE, py = d.y * TILE;
   return { kind: 'flyer', x: px, y: py, w: 22, h: 16, vx: 0, vy: 0, homeX: px + 11, homeY: py + 8,
@@ -174,6 +192,8 @@ function spawnEnemies() {
   for (const d of L.spawns.walkers) enemies.push(makeWalker(d));
   for (const d of L.spawns.shells) enemies.push(makeShell(d));
   for (const d of L.spawns.flyers) enemies.push(makeFlyer(d));
+  for (const d of L.spawns.thorns) enemies.push(makeThorn(d));
+  for (const d of L.spawns.bombers) enemies.push(makeBomber(d));
   for (const d of L.spawns.casters) enemies.push(makeCaster(d));
   for (const d of L.spawns.bosses) if (!deadBosses.has(d.id)) enemies.push(makeBoss(d));
 }
@@ -218,9 +238,10 @@ window.addEventListener('keydown', (e) => {
   if (state === 'victory') return;
 
   if (e.code === 'KeyP') { paused = !paused; return; }
-  if (e.code === 'Tab') { overlayOpen = !overlayOpen; return; }
-  if (e.code === 'KeyM') { muted = !muted; pushMsg(muted ? '靜音' : '音效開啟', 1.2); return; }
-  if (paused) return;
+  if (e.code === 'Tab') { overlayOpen = !overlayOpen; mapOpen = false; return; }
+  if (e.code === 'KeyM') { mapOpen = !mapOpen; overlayOpen = false; return; }
+  if (e.code === 'KeyN') { muted = !muted; pushMsg(muted ? '靜音' : '音效開啟', 1.2); return; }
+  if (paused || mapOpen) return;
 
   // Shift：切換破陣模式（按一次進入，確認後或再按一次退出）
   if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') { toggleBreakMode(); return; }
@@ -513,6 +534,47 @@ function updateEnemy(e, dt) {
     return;
   }
 
+  if (e.kind === 'thorn') { // 棘晶弩：定點直射
+    moveEntity(e, dt);
+    if (e.shotFlash > 0) e.shotFlash -= dt;
+    e.shootCd -= dt;
+    const dx2 = cx(player) - cx(e), dy2 = cy(player) - cy(e);
+    if (e.shootCd <= 0 && !player.dead && Math.abs(dx2) < 430 && Math.abs(dy2) < 170) {
+      e.shootCd = 2.2; e.shotFlash = 0.15;
+      const a = Math.atan2(dy2, dx2);
+      projectiles.push({ x: cx(e), y: e.y + 8, vx: Math.cos(a) * 330, vy: Math.sin(a) * 330, r: 5, dmg: 11, owner: 'enemy', homing: false, life: 3, col: '#d9a441' });
+      beep(260, 0.08, 'square', 0.07, -60);
+    }
+    return;
+  }
+
+  if (e.kind === 'bomber') { // 爆晶蟲：貼近後倒數自爆
+    e.t += dt;
+    if (e.fuse >= 0) { // 引信已點燃
+      e.fuse -= dt;
+      if (Math.floor(e.fuse * 8) % 2 === 0) e.flash = 0.05;
+      if (e.fuse <= 0) {
+        e.dead = true;
+        snd.boom(); shake(5, 0.25);
+        burst(cx(e), cy(e), '#ff5060', 26, 220, 0.7);
+        if (!player.dead && dist2(cx(e), cy(e), cx(player), cy(player)) < 85 * 85) applyPlayerDamage(22);
+        return;
+      }
+    }
+    const pd = dist2(cx(player), cy(player), cx(e), cy(e));
+    const aggro = !player.dead && pd < 380 * 380;
+    if (e.fuse < 0 && aggro && pd < 62 * 62) { e.fuse = 0.8; beep(1200, 0.1, 'square', 0.1); }
+    const tx2 = (aggro ? cx(player) : e.homeX);
+    const ty2 = (aggro ? cy(player) : e.homeY) + Math.sin(e.t * 4) * 12;
+    const spd = e.fuse >= 0 ? 60 : 120;
+    e.vx += clamp(tx2 - cx(e), -1, 1) * 300 * dt; e.vx = clamp(e.vx, -spd, spd);
+    e.vy += clamp(ty2 - cy(e), -1, 1) * 300 * dt; e.vy = clamp(e.vy, -spd, spd);
+    const nx = e.x + e.vx * dt, ny = e.y + e.vy * dt;
+    if (!rectSolid(nx, e.y, e.w, e.h)) e.x = nx; else e.vx *= -0.6;
+    if (!rectSolid(e.x, ny, e.w, e.h)) e.y = ny; else e.vy *= -0.6;
+    return;
+  }
+
   if (e.kind === 'flyer') { // 晶蝠：無重力盤旋，追擊玩家
     e.t += dt;
     const aggro = !player.dead && dist2(cx(player), cy(player), cx(e), cy(e)) < 420 * 420;
@@ -660,8 +722,8 @@ function updatePlayer(dt) {
     for (const e of enemies) if (!e.dead && !player.attackHit.has(e) && overlap(hb, e)) { player.attackHit.add(e); damageEnemy(e, 9, null, 'melee'); burst(cx(e), cy(e), '#cfd6ff', 8, 120, 0.4); }
   }
 
-  // 敵人接觸傷害
-  for (const e of enemies) if (!e.dead && overlap(player, e)) {
+  // 敵人接觸傷害（爆晶蟲 touchDmg=0，靠自爆，不觸發接觸無敵）
+  for (const e of enemies) if (!e.dead && e.touchDmg > 0 && overlap(player, e)) {
     applyPlayerDamage(e.touchDmg);
     if (player.iframes >= 0.99) { player.vx = Math.sign(cx(player) - cx(e)) * 260; player.vy = -260; }
   }
@@ -867,9 +929,43 @@ function drawFormationCircle(fx, fy, rad, seq, shown, rot, prog, backlash, alpha
     ctx.beginPath(); ctx.arc(0, 0, rad * 0.28, 0, Math.PI * 2); ctx.fill();
   }
   ctx.restore();
+  // 起始標記：陣心指針指向第一個元素（隨陣旋轉）
+  if (n >= 1) {
+    const a0 = rot - Math.PI / 2;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(fx, fy);
+    ctx.fillStyle = '#ffe08a';
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a0) * rad * 0.55, Math.sin(a0) * rad * 0.55);
+    ctx.lineTo(Math.cos(a0 + 2.6) * 6, Math.sin(a0 + 2.6) * 6);
+    ctx.lineTo(Math.cos(a0 - 2.6) * 6, Math.sin(a0 - 2.6) * 6);
+    ctx.closePath(); ctx.fill();
+    // 讀序方向箭頭（起始元素 → 第二元素）
+    if (n >= 2) {
+      const aDir = a0 + (Math.PI * 2 / n) * 0.5;
+      const mx = Math.cos(aDir) * rad * 0.95, my = Math.sin(aDir) * rad * 0.95;
+      const tang = aDir + Math.PI / 2;
+      ctx.strokeStyle = '#ffe08a'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(mx - Math.cos(tang) * 7, my - Math.sin(tang) * 7);
+      ctx.lineTo(mx + Math.cos(tang) * 3, my + Math.sin(tang) * 3);
+      ctx.lineTo(mx + Math.cos(tang - 2.6) * 5 + Math.cos(tang) * 3, my + Math.sin(tang - 2.6) * 5 + Math.sin(tang) * 3);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
   for (let i = 0; i < Math.min(shown, n); i++) {
     const a = rot + i * Math.PI * 2 / n - Math.PI / 2;
-    drawGlyph(seq[i], fx + Math.cos(a) * rad * 0.8, fy + Math.sin(a) * rad * 0.8, 11, alpha);
+    const r2 = i === 0 ? 14 : 11; // 起始元素放大
+    drawGlyph(seq[i], fx + Math.cos(a) * rad * 0.8, fy + Math.sin(a) * rad * 0.8, r2, alpha);
+    if (i === 0) { // 起始元素金環
+      ctx.save();
+      ctx.globalAlpha = alpha * (0.7 + 0.3 * Math.sin(globalT * 5));
+      ctx.strokeStyle = '#ffe08a'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(fx + Math.cos(a) * rad * 0.8, fy + Math.sin(a) * rad * 0.8, 17, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+    }
   }
 }
 // 將圖片滿版覆蓋整個畫面（保持比例、置中裁切）
@@ -1109,6 +1205,30 @@ function drawEnemy(e) {
     }
     ctx.fillStyle = '#ff5544';
     ctx.fillRect(sx + (e.dir > 0 ? e.w - 8 : 4), sy + e.h - 16, 4, 3);
+  } else if (e.kind === 'thorn') {
+    // 棘晶弩：晶簇砲塔
+    const pulse = 0.6 + 0.4 * Math.sin(e.animT * 3);
+    ctx.fillStyle = '#4a4462';
+    ctx.beginPath(); ctx.moveTo(sx, sy + e.h); ctx.lineTo(sx + e.w / 2, sy + 6); ctx.lineTo(sx + e.w, sy + e.h); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#6b6390';
+    ctx.beginPath(); ctx.moveTo(sx + 4, sy + e.h); ctx.lineTo(sx + 8, sy + 14); ctx.lineTo(sx + 12, sy + e.h); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(sx + 12, sy + e.h); ctx.lineTo(sx + 16, sy + 12); ctx.lineTo(sx + 20, sy + e.h); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = e.shotFlash > 0 ? '#ffe08a' : '#d9a441';
+    ctx.globalAlpha = pulse;
+    ctx.beginPath(); ctx.arc(sx + e.w / 2, sy + 10, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  } else if (e.kind === 'bomber') {
+    // 爆晶蟲：小圓晶蟲，點燃引信時閃紅
+    const fused = e.fuse >= 0;
+    const blink = fused && Math.floor(globalT * 10) % 2 === 0;
+    ctx.fillStyle = blink ? '#ff5060' : '#8a5f9e';
+    ctx.beginPath(); ctx.ellipse(sx + 9, sy + 8, 8, 6, 0, 0, Math.PI * 2); ctx.fill();
+    const flap = Math.sin(e.animT * 16) * 4;
+    ctx.strokeStyle = 'rgba(220,200,255,0.7)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(sx + 4, sy + 4); ctx.lineTo(sx - 2, sy - 2 + flap); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx + 14, sy + 4); ctx.lineTo(sx + 20, sy - 2 + flap); ctx.stroke();
+    ctx.fillStyle = blink ? '#fff' : '#ffb0c0';
+    ctx.fillRect(sx + 6, sy + 6, 2, 2); ctx.fillRect(sx + 11, sy + 6, 2, 2);
   } else if (e.kind === 'flyer') {
     // 晶蝠：撲翼水晶蝙蝠
     const flap = Math.sin(e.animT * 14) * 8;
@@ -1285,6 +1405,20 @@ function drawSignPanels() {
   }
   ctx.textBaseline = 'alphabetic';
 }
+// 陣式名稱表（主效果,修飾 → 名稱）
+const FORMATION_NAMES = {
+  'fire,water': '延燒', 'fire,earth': '火種', 'fire,wind': '追蹤火球',
+  'water,fire': '爆療', 'water,wind': '流療', 'water,earth': '泉湧',
+  'earth,fire': '爆破陷阱', 'earth,water': '回復陷阱', 'earth,wind': '感應陷阱',
+  'wind,fire': '衝刺', 'wind,water': '流體位移', 'wind,earth': '錨點傳送',
+};
+function formationPreview(seq) {
+  if (seq.length < 2) return null;
+  const ana = F.analyze(seq);
+  const name = FORMATION_NAMES[ana.effective[0] + ',' + (ana.effective[1] || '')] || '奧義';
+  const closed = F.checkClosure(seq) === null;
+  return { name, closed, backlash: ana.backlash };
+}
 function drawBar(x, y, w, h, ratio, col, label) {
   ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(x, y, w, h);
   ctx.fillStyle = col; ctx.fillRect(x + 1, y + 1, (w - 2) * clamp(ratio, 0, 1), h - 2);
@@ -1302,7 +1436,7 @@ function drawHud() {
   }
   ctx.fillStyle = 'rgba(230,236,255,0.75)';
   ctx.font = '12px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'right';
-  ctx.fillText('Tab 陣式表　P 暫停　M 靜音', VW - 14, 22);
+  ctx.fillText('Tab 陣式表　M 地圖　P 暫停　N 靜音', VW - 14, 22);
 
   // 施放序列（左下）
   ctx.textAlign = 'left';
@@ -1317,6 +1451,15 @@ function drawHud() {
     const ch = player.channel;
     drawBar(16, VH - 16, player.slots * 32, 6, ch.t / ch.total, '#cfd6ff');
     ctx.fillStyle = '#cfd6ff'; ctx.fillText('施展窗口…', 16 + player.slots * 32 + 8, VH - 10);
+  } else if (player.seq.length > 0) {
+    // 陣式即時預覽
+    const pv = formationPreview(player.seq);
+    ctx.textAlign = 'left';
+    if (!pv) { ctx.fillStyle = '#8a93bf'; ctx.fillText('（至少兩個元素）', 16, VH - 12); }
+    else {
+      ctx.fillStyle = pv.closed ? '#8fe0c0' : '#ff9db0';
+      ctx.fillText('→ ' + pv.name + (pv.backlash ? '・反噬' : '') + (pv.closed ? '（可起陣）' : '（未成圓——尾端須能接回開頭）'), 16, VH - 12);
+    }
   }
   // 破陣序列（右下）
   ctx.textAlign = 'right';
@@ -1435,6 +1578,43 @@ function drawBossIntro() {
   ctx.fillText(bossIntroData.name.split('').join(' '), px - 16, VH / 2 + 22);
   ctx.restore();
 }
+function drawMap() {
+  ctx.fillStyle = 'rgba(6,5,14,0.94)';
+  ctx.fillRect(20, 40, VW - 40, VH - 80);
+  ctx.strokeStyle = '#57cfae'; ctx.strokeRect(20.5, 40.5, VW - 40, VH - 80);
+  ctx.fillStyle = '#9fe8ff';
+  ctx.font = 'bold 18px "Microsoft JhengHei", sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('洞窟輿圖（M 關閉）', 44, 72);
+  const sc = 2.1;
+  const ox = VW / 2 - (L.W * sc) / 2, oy = VH / 2 - (L.H * sc) / 2 + 14;
+  // 地形（僅顯示探索過的區塊）
+  for (let ty = 0; ty < L.H; ty++) for (let tx = 0; tx < L.W; tx++) {
+    if (!exploredAt(tx, ty)) continue;
+    const v = L.at(tx, ty);
+    ctx.fillStyle = v === 1 ? '#454064' : v === 2 ? '#8d94a8' : '#12101f';
+    ctx.fillRect(ox + tx * sc, oy + ty * sc, sc, sc);
+  }
+  const dot = (tx, ty, col, r) => { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(ox + tx * sc, oy + ty * sc, r || 3.5, 0, Math.PI * 2); ctx.fill(); };
+  // 圖標（在探索範圍內才顯示）
+  for (const c of checkpoints) if (c.lit) dot(c.x / TILE + 0.5, c.y / TILE - 1, '#ffe08a');
+  for (const b of barriers) if (!b.broken && exploredAt(b.x, b.y1)) { ctx.fillStyle = F.INFO[b.seq[0]].color; ctx.fillRect(ox + b.x * sc, oy + b.y0 * sc, sc, (b.y1 - b.y0 + 1) * sc); }
+  for (const s of seals) if (!deadBosses.has(s.boss) && exploredAt(s.x, s.y1)) { ctx.fillStyle = '#c080ff'; ctx.fillRect(ox + s.x * sc, oy + s.y0 * sc, sc, (s.y1 - s.y0 + 1) * sc); }
+  for (const e of enemies) if (e.kind === 'boss' && !e.dead && exploredAt(e.x / TILE, e.y / TILE + 1)) dot(e.x / TILE + 0.7, e.y / TILE + 1, '#ff5060', 4);
+  for (const p of pickups) if (p.type !== 'manaOrb' && exploredAt(p.x / TILE, p.y / TILE)) dot(p.x / TILE, p.y / TILE, '#9fe8ff', 2.5);
+  if (goal && exploredAt(goal.x / TILE, goal.y / TILE - 1)) dot(goal.x / TILE + 0.5, goal.y / TILE - 1.5, deadBosses.has('b3') ? '#c080ff' : 'rgba(192,128,255,0.4)', 4);
+  // 玩家位置（閃爍）
+  if (Math.floor(globalT * 3) % 2 === 0) dot(cx(player) / TILE, cy(player) / TILE, '#ffffff', 4);
+  // 圖例
+  ctx.font = '12px "Microsoft JhengHei", sans-serif';
+  ctx.textAlign = 'left';
+  const legend = [['#ffffff', '你'], ['#ffe08a', '祭壇'], ['#d9a441', '結界'], ['#c080ff', '封印／門'], ['#ff5060', '頭目'], ['#9fe8ff', '寶物']];
+  legend.forEach((lg, i) => {
+    const lx = 44 + i * 110;
+    ctx.fillStyle = lg[0]; ctx.beginPath(); ctx.arc(lx, VH - 62, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#dfe6ff'; ctx.fillText(lg[1], lx + 10, VH - 58);
+  });
+}
 function drawScreens() {
   if (state === 'title') {
     if (Assets.has('titleScene')) { drawCover(Assets.img.titleScene); ctx.fillStyle = 'rgba(8,7,18,0.6)'; ctx.fillRect(0, 0, VW, VH); }
@@ -1452,7 +1632,7 @@ function drawScreens() {
       '移動 ←→　跳躍 X　法杖 C',
       '施放：A火 S水 D風 F土 輸入元素，Space 起陣',
       '破陣：按 Shift 進入破陣模式，輸入克制序列後 Space 發動',
-      'Tab 陣式表　Backspace 撤銷輸入',
+      'Tab 陣式表　M 地圖　Backspace 撤銷輸入',
     ];
     lines.forEach((ln, i) => ctx.fillText(ln, VW / 2, 270 + i * 28));
     ctx.fillStyle = '#ffe9b0';
@@ -1521,6 +1701,7 @@ function render() {
   if (state !== 'title') drawHud();
   if (state === 'play' && bossIntroT > 0) drawBossIntro();
   if (overlayOpen && state === 'play') drawOverlay();
+  if (mapOpen && state === 'play') drawMap();
   drawScreens();
 }
 
@@ -1532,8 +1713,9 @@ function frame(now) {
   lastTime = now;
   globalT += dt;
   if (bossIntroT > 0) bossIntroT -= dt;
-  if (state === 'play' && !paused && !overlayOpen) {
+  if (state === 'play' && !paused && !overlayOpen && !mapOpen) {
     playTime += dt;
+    markExplored();
     updatePlayer(dt);
     for (const e of enemies) updateEnemy(e, dt);
     enemies = enemies.filter(e => !e.dead);
