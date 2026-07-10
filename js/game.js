@@ -54,7 +54,7 @@ const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h 
 // ---------------- 世界狀態 ----------------
 let state = 'title'; // title | play | dead | victory
 let paused = false, overlayOpen = false;
-let playTime = 0, shakeT = 0, shakeMag = 0, globalT = 0, bossIntroT = 0;
+let playTime = 0, shakeT = 0, shakeMag = 0, globalT = 0, bossIntroT = 0, goalMsgT = -9;
 let cam = { x: 0, y: 0 };
 let enemies = [], projectiles = [], zones = [], traps = [], blasts = [], particles = [], pickups = [], messages = [];
 let barriers = [], checkpoints = [], signs = [], goal = null;
@@ -179,7 +179,8 @@ function respawn() {
 
 // ---------------- 輸入 ----------------
 const keys = {};
-// 元素鍵：火=A 水=S 風=D 土=F（左手 home row）。移動用方向鍵、攻擊用 X，同 Hollow Knight。破陣＝Shift+同鍵。
+// 元素鍵：火=A 水=S 風=D 土=F（左手 home row）。移動＝方向鍵、跳=X、攻擊=C、確認=Space。
+// 破陣＝按一次 Shift 進入破陣模式（元素改輸入破陣序列），Space 發動後自動退出。
 const KEY_ELEM = { KeyA: 'fire', KeyS: 'water', KeyD: 'wind', KeyF: 'earth' };
 window.addEventListener('keydown', (e) => {
   if (['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Backspace'].includes(e.code)) e.preventDefault();
@@ -561,6 +562,7 @@ function updatePlayer(dt) {
   // 終點
   if (goal && Math.abs(cx(player) - (goal.x + 16)) < 34 && Math.abs(player.y + player.h - goal.y) < 60) {
     if (bossDead) { state = 'victory'; snd.breakOk(); }
+    else if (globalT - goalMsgT > 3) { goalMsgT = globalT; pushMsg('邪陣未破，門扉緊閉……', 2.2); }
   }
 }
 
@@ -1160,7 +1162,7 @@ function drawOverlay() {
     [null, ''],
     ['#dfe6ff', '規則'],
     [null, '・同元素不能相鄰；被克元素不能接續'],
-    [null, '・序列首尾必須接成圓（Enter 檢查）'],
+    [null, '・序列首尾必須接成圓（Space 起陣時檢查）'],
     [null, '・主效果＝第一個有效元素'],
     [null, '・間接元素只作橋接，不生效果'],
     [null, '　（例 A F S：土被 火/水 夾住而透明化）'],
