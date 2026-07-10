@@ -179,9 +179,10 @@ function respawn() {
 
 // ---------------- 輸入 ----------------
 const keys = {};
-const KEY_ELEM = { Digit1: 'fire', Digit2: 'water', Digit3: 'wind', Digit4: 'earth', Numpad1: 'fire', Numpad2: 'water', Numpad3: 'wind', Numpad4: 'earth' };
+// 元素鍵：火=A 水=S 風=D 土=F（左手 home row）。移動用方向鍵、攻擊用 X，同 Hollow Knight。破陣＝Shift+同鍵。
+const KEY_ELEM = { KeyA: 'fire', KeyS: 'water', KeyD: 'wind', KeyF: 'earth' };
 window.addEventListener('keydown', (e) => {
-  if (['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Backspace'].includes(e.code) || e.code.startsWith('Digit')) e.preventDefault();
+  if (['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Backspace'].includes(e.code)) e.preventDefault();
   if (e.repeat) { keys[e.code] = true; return; }
   keys[e.code] = true;
 
@@ -201,8 +202,8 @@ window.addEventListener('keydown', (e) => {
     if (e.shiftKey) { player.breakSeq.pop(); } else if (!player.channel) { player.seq.pop(); }
     return;
   }
-  if (e.code === 'KeyF') { doMelee(); return; }
-  if (e.code === 'Space' || e.code === 'KeyW' || e.code === 'ArrowUp') { player.jumpBuf = 0.12; return; }
+  if (e.code === 'KeyX') { doMelee(); return; }
+  if (e.code === 'Space' || e.code === 'ArrowUp') { player.jumpBuf = 0.12; return; }
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
@@ -469,7 +470,7 @@ function updatePlayer(dt) {
     if (Math.random() < dt * 6) particles.push({ x: player.x + Math.random() * player.w, y: player.y + player.h, vx: 0, vy: -50, life: 0.6, maxLife: 0.6, col: '#7fd0ff', size: 2, grav: 0 }); }
 
   const chanSlow = player.channel ? 0.55 : 1;
-  const left = keys.ArrowLeft || keys.KeyA, right = keys.ArrowRight || keys.KeyD;
+  const left = keys.ArrowLeft, right = keys.ArrowRight;
   if (player.dashT > 0) {
     player.dashT -= dt;
     player.vx = player.dashDir * 820; player.vy = 0;
@@ -487,7 +488,7 @@ function updatePlayer(dt) {
       player.vy = JUMP_V; player.jumpBuf = 0; player.coyote = 0;
       beep(240, 0.08, 'sine', 0.05, 120);
     }
-    if (player.vy < 0 && !(keys.Space || keys.KeyW || keys.ArrowUp)) player.vy += GRAV * 0.9 * dt; // 短按小跳
+    if (player.vy < 0 && !(keys.Space || keys.ArrowUp)) player.vy += GRAV * 0.9 * dt; // 短按小跳
     moveEntity(player, dt);
   }
 
@@ -1037,7 +1038,7 @@ function drawHud() {
   // 施放序列（左下）
   ctx.textAlign = 'left';
   ctx.fillStyle = '#aeb8e8';
-  ctx.fillText('施放陣列（1火 2水 3風 4土 → Enter 起陣）', 16, VH - 58);
+  ctx.fillText('施放陣列（A火 S水 D風 F土 → Enter 起陣）', 16, VH - 58);
   for (let i = 0; i < player.slots; i++) {
     const x = 26 + i * 32, y = VH - 34;
     if (i < player.seq.length) drawGlyph(player.seq[i], x, y, 12);
@@ -1051,7 +1052,7 @@ function drawHud() {
   // 破陣序列（右下）
   ctx.textAlign = 'right';
   ctx.fillStyle = '#aeb8e8';
-  ctx.fillText('破陣序列（Shift+鍵 → Shift+Enter）', VW - 16, VH - 58);
+  ctx.fillText('破陣序列（Shift+元素鍵 → Shift+Enter）', VW - 16, VH - 58);
   for (let i = 0; i < player.breakSlots; i++) {
     const x = VW - 26 - (player.breakSlots - 1 - i) * 32, y = VH - 34;
     if (i < player.breakSeq.length) drawGlyph(player.breakSeq[i], x, y, 12);
@@ -1082,24 +1083,27 @@ function drawOverlay() {
   ctx.fillStyle = '#9fe8ff';
   ctx.font = 'bold 18px "Microsoft JhengHei", sans-serif';
   ctx.fillText('陣式總覽（Tab 關閉）', 64, 62);
+  ctx.font = '13px "Microsoft JhengHei", sans-serif';
+  ctx.fillStyle = '#8fe0c0';
+  ctx.fillText('施放鍵：A火　S水　D風　F土　（破陣：按住 Shift＋同鍵）', 64, 80);
   ctx.font = '14px "Microsoft JhengHei", sans-serif';
   const colL = [
     ['#ff8866', '攻・火為首'],
-    [null, '　延燒（持續灼燒）……… 1 4 2'],
-    [null, '　火種（燃燒地帶）……… 1 4'],
-    [null, '　追蹤火球 ………………… 1 3 4'],
+    [null, '　延燒（持續灼燒）……… A F S'],
+    [null, '　火種（燃燒地帶）……… A F'],
+    [null, '　追蹤火球 ………………… A D F'],
     ['#7fd0ff', '療・水為首'],
-    [null, '　爆療（瞬間大量）……… 2 1 3'],
-    [null, '　流療（治療跟隨）……… 2 3'],
-    [null, '　泉湧（回血區）………… 2 1 4'],
+    [null, '　爆療（瞬間大量）……… S A D'],
+    [null, '　流療（治療跟隨）……… S D'],
+    [null, '　泉湧（回血區）………… S A F'],
     ['#f2d49b', '陷・土為首（延遲觸發）'],
-    [null, '　爆破陷阱 ………………… 4 1'],
-    [null, '　回復陷阱 ………………… 4 2 1'],
-    [null, '　感應陷阱（自動）……… 4 2 3'],
+    [null, '　爆破陷阱 ………………… F A'],
+    [null, '　回復陷阱 ………………… F S A'],
+    [null, '　感應陷阱（自動）……… F S D'],
     ['#c2ffd9', '移・風為首'],
-    [null, '　衝刺（撞擊傷害）……… 3 4 1'],
-    [null, '　流體位移（殘影無敵）… 3 2'],
-    [null, '　錨點傳送 ………………… 3 4 2'],
+    [null, '　衝刺（撞擊傷害）……… D F A'],
+    [null, '　流體位移（殘影無敵）… D S'],
+    [null, '　錨點傳送 ………………… D F S'],
   ];
   colL.forEach((ln, i) => {
     ctx.fillStyle = ln[0] || '#dfe6ff';
@@ -1113,16 +1117,16 @@ function drawOverlay() {
     [null, '・序列首尾必須接成圓（Enter 檢查）'],
     [null, '・主效果＝第一個有效元素'],
     [null, '・間接元素只作橋接，不生效果'],
-    [null, '　（例 1 4 2：土被 火/水 夾住而透明化）'],
+    [null, '　（例 A F S：土被 火/水 夾住而透明化）'],
     [null, ''],
     ['#ff9db0', '反噬陣'],
     [null, '・兩個以上「同元素」間接元素即成反噬'],
-    [null, '・例：1 3 2 3 4（兩個風皆為間接）'],
+    [null, '・例：A D S D F（兩個風皆為間接）'],
     [null, '・反噬陣被破時，破陣者受到反傷'],
     [null, ''],
     ['#c2ffd9', '破陣'],
     [null, '・把對方序列每個元素換成克制它的元素'],
-    [null, '・Shift+數字輸入，Shift+Enter 發動'],
+    [null, '・Shift+元素鍵輸入，Shift+Enter 發動'],
     [null, '・陣會旋轉——從任一位置讀出週期皆可'],
   ];
   colR.forEach((ln, i) => {
@@ -1143,9 +1147,9 @@ function drawScreens() {
     ctx.fillStyle = '#dfe6ff';
     ctx.font = '15px "Microsoft JhengHei", sans-serif';
     const lines = [
-      '移動 ←→/AD　跳躍 Space　法杖 F',
-      '佈陣：1火 2水 3風 4土 輸入元素，Enter 起陣',
-      '破陣：Shift+數字 輸入克制序列，Shift+Enter 發動',
+      '移動 ←→　跳躍 Space／↑　法杖 X',
+      '施放：A火 S水 D風 F土 輸入元素，Enter 起陣',
+      '破陣：Shift+元素鍵 輸入克制序列，Shift+Enter 發動',
       'Tab 陣式表　Backspace 撤銷輸入',
     ];
     lines.forEach((ln, i) => ctx.fillText(ln, VW / 2, 270 + i * 28));
