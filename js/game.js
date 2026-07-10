@@ -54,7 +54,7 @@ const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h 
 // ---------------- 世界狀態 ----------------
 let state = 'title'; // title | play | dead | victory
 let paused = false, overlayOpen = false;
-let playTime = 0, shakeT = 0, shakeMag = 0, globalT = 0;
+let playTime = 0, shakeT = 0, shakeMag = 0, globalT = 0, bossIntroT = 0;
 let cam = { x: 0, y: 0 };
 let enemies = [], projectiles = [], zones = [], traps = [], blasts = [], particles = [], pickups = [], messages = [];
 let barriers = [], checkpoints = [], signs = [], goal = null;
@@ -442,7 +442,7 @@ function updateEnemy(e, dt) {
 
   const inRange = Math.abs(cx(player) - cx(e)) < 460 && Math.abs(cy(player) - cy(e)) < 220 && !player.dead;
   if (e.kind === 'boss') {
-    if (!bossAggro && !player.dead && player.x > 187 * TILE) { bossAggro = true; pushMsg('深陣咒主現身！', 2.5); }
+    if (!bossAggro && !player.dead && player.x > 187 * TILE) { bossAggro = true; bossIntroT = 3.2; pushMsg('深陣咒主現身！', 2.5); }
     if (bossAggro && !e.channel && e.state !== 'stun') {
       const d = cx(player) - cx(e);
       if (Math.abs(d) > 70) e.vx = Math.sign(d) * 35; else e.vx = 0;
@@ -721,24 +721,51 @@ function drawFormationCircle(fx, fy, rad, seq, shown, rot, prog, backlash, alpha
     drawGlyph(seq[i], fx + Math.cos(a) * rad * 0.8, fy + Math.sin(a) * rad * 0.8, 11, alpha);
   }
 }
+// 將圖片滿版覆蓋整個畫面（保持比例、置中裁切）
+function drawCover(im) {
+  const s = Math.max(VW / im.width, VH / im.height);
+  const dw = im.width * s, dh = im.height * s;
+  ctx.drawImage(im, (VW - dw) / 2, (VH - dh) / 2, dw, dh);
+}
+// 圓形頭像徽章（取立繪臉部區域）
+function drawPortraitBadge(im, px, py, r, ring) {
+  const side = im.width * 0.62;
+  const sx = (im.width - side) / 2, sy = im.height * 0.06;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.closePath(); ctx.clip();
+  ctx.drawImage(im, sx, sy, side, side, px - r, py - r, r * 2, r * 2);
+  ctx.restore();
+  ctx.strokeStyle = ring || '#fff'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.stroke(); ctx.lineWidth = 1;
+}
 function drawBackground() {
   const g = ctx.createLinearGradient(0, 0, 0, VH);
   g.addColorStop(0, '#171430'); g.addColorStop(0.6, '#100e1f'); g.addColorStop(1, '#0b0a14');
   ctx.fillStyle = g; ctx.fillRect(0, 0, VW, VH);
-  // 遠景鐘乳石與石丘（兩層視差）
-  for (let layer = 0; layer < 2; layer++) {
-    const par = layer === 0 ? 0.25 : 0.5;
-    ctx.fillStyle = layer === 0 ? '#1c1936' : '#242044';
-    const off = cam.x * par;
-    for (let i = -1; i < 16; i++) {
-      const wx = Math.floor((off + i * 90) / 90);
-      const sx = wx * 90 - off;
-      const h1 = 60 + hash(wx, layer) * 150;
-      ctx.beginPath();
-      ctx.moveTo(sx, 0); ctx.lineTo(sx + 45, h1); ctx.lineTo(sx + 90, 0); ctx.closePath(); ctx.fill();
-      const h2 = 60 + hash(wx, layer + 7) * 170;
-      ctx.beginPath();
-      ctx.moveTo(sx, VH); ctx.lineTo(sx + 45, VH - h2); ctx.lineTo(sx + 90, VH); ctx.closePath(); ctx.fill();
+  if (Assets.has('bgCave')) {
+    // AI 生成洞窟背景，水平平鋪＋視差捲動
+    const im = Assets.img.bgCave;
+    const scale = (VH / im.height) * 1.12;
+    const dw = im.width * scale, dh = im.height * scale;
+    let ox = -((cam.x * 0.35) % dw); if (ox > 0) ox -= dw;
+    for (let x = ox; x < VW; x += dw) ctx.drawImage(im, x, VH - dh, dw, dh);
+    ctx.fillStyle = 'rgba(9,8,18,0.5)'; ctx.fillRect(0, 0, VW, VH); // 壓暗讓前景突出
+  } else {
+    // 遠景鐘乳石與石丘（兩層視差，程式化 fallback）
+    for (let layer = 0; layer < 2; layer++) {
+      const par = layer === 0 ? 0.25 : 0.5;
+      ctx.fillStyle = layer === 0 ? '#1c1936' : '#242044';
+      const off = cam.x * par;
+      for (let i = -1; i < 16; i++) {
+        const wx = Math.floor((off + i * 90) / 90);
+        const sx = wx * 90 - off;
+        const h1 = 60 + hash(wx, layer) * 150;
+        ctx.beginPath();
+        ctx.moveTo(sx, 0); ctx.lineTo(sx + 45, h1); ctx.lineTo(sx + 90, 0); ctx.closePath(); ctx.fill();
+        const h2 = 60 + hash(wx, layer + 7) * 170;
+        ctx.beginPath();
+        ctx.moveTo(sx, VH); ctx.lineTo(sx + 45, VH - h2); ctx.lineTo(sx + 90, VH); ctx.closePath(); ctx.fill();
+      }
     }
   }
   // 漂浮塵光
@@ -1041,8 +1068,14 @@ function drawBar(x, y, w, h, ratio, col, label) {
   if (label) { ctx.fillStyle = '#fff'; ctx.font = '11px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'left'; ctx.fillText(label, x + 4, y + h - 3); }
 }
 function drawHud() {
-  drawBar(16, 14, 190, 14, player.hp / player.maxHp, '#e0445c', '生命 ' + Math.ceil(player.hp));
-  drawBar(16, 32, 190, 11, player.mp / player.maxMp, '#4a7dde', '靈力 ' + Math.floor(player.mp));
+  if (Assets.has('playerPortrait')) {
+    drawBar(56, 16, 172, 13, player.hp / player.maxHp, '#e0445c', '生命 ' + Math.ceil(player.hp));
+    drawBar(56, 33, 172, 10, player.mp / player.maxMp, '#4a7dde', '靈力 ' + Math.floor(player.mp));
+    drawPortraitBadge(Assets.img.playerPortrait, 30, 30, 17, '#7fb0ff');
+  } else {
+    drawBar(16, 14, 190, 14, player.hp / player.maxHp, '#e0445c', '生命 ' + Math.ceil(player.hp));
+    drawBar(16, 32, 190, 11, player.mp / player.maxMp, '#4a7dde', '靈力 ' + Math.floor(player.mp));
+  }
   ctx.fillStyle = 'rgba(230,236,255,0.75)';
   ctx.font = '12px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'right';
   ctx.fillText('Tab 陣式表　P 暫停　M 靜音', VW - 14, 22);
@@ -1073,6 +1106,7 @@ function drawHud() {
   // 頭目血條
   if (bossAggro && bossRef && !bossRef.dead) {
     drawBar(VW / 2 - 180, 20, 360, 13, bossRef.hp / bossRef.maxHp, '#a050e0', '深陣咒主');
+    if (Assets.has('bossPortrait')) drawPortraitBadge(Assets.img.bossPortrait, VW / 2 - 180 - 18, 26, 15, '#c080ff');
   }
   // 訊息
   ctx.textAlign = 'center';
@@ -1146,9 +1180,34 @@ function drawOverlay() {
     ctx.fillText(ln[1], 500, 92 + i * 24);
   });
 }
+function drawBossIntro() {
+  const appear = clamp((3.2 - bossIntroT) * 3, 0, 1); // 進場
+  const fade = clamp(bossIntroT * 1.5, 0, 1);         // 收場淡出
+  const alpha = Math.min(appear, fade);
+  const slide = (1 - appear) * 130;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  const pw = 160, ph = 216, px = VW - pw - 46 + slide, py = VH / 2 - ph / 2 - 10;
+  if (Assets.has('bossPortrait')) {
+    const im = Assets.img.bossPortrait;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(px, py, pw, ph); ctx.closePath(); ctx.clip();
+    const s = Math.max(pw / im.width, ph / im.height);
+    ctx.drawImage(im, px + (pw - im.width * s) / 2, py + (ph - im.height * s) / 2, im.width * s, im.height * s);
+    ctx.restore();
+    ctx.strokeStyle = '#c080ff'; ctx.lineWidth = 3; ctx.strokeRect(px, py, pw, ph);
+  }
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#e6ccff'; ctx.font = '15px "Microsoft JhengHei", sans-serif';
+  ctx.fillText('—— 深層陣殿之主 ——', px - 16, VH / 2 - 14);
+  ctx.fillStyle = '#c080ff'; ctx.font = 'bold 34px "Microsoft JhengHei", sans-serif';
+  ctx.fillText('深 陣 咒 主', px - 16, VH / 2 + 22);
+  ctx.restore();
+}
 function drawScreens() {
   if (state === 'title') {
-    ctx.fillStyle = 'rgba(8,7,18,0.85)'; ctx.fillRect(0, 0, VW, VH);
+    if (Assets.has('titleScene')) { drawCover(Assets.img.titleScene); ctx.fillStyle = 'rgba(8,7,18,0.6)'; ctx.fillRect(0, 0, VW, VH); }
+    else { ctx.fillStyle = 'rgba(8,7,18,0.85)'; ctx.fillRect(0, 0, VW, VH); }
     ctx.textAlign = 'center';
     ctx.fillStyle = '#9fe8ff';
     ctx.font = 'bold 52px "Microsoft JhengHei", sans-serif';
@@ -1228,6 +1287,7 @@ function render() {
   drawSignPanels();
   ctx.restore();
   if (state !== 'title') drawHud();
+  if (state === 'play' && bossIntroT > 0) drawBossIntro();
   if (overlayOpen && state === 'play') drawOverlay();
   drawScreens();
 }
@@ -1239,6 +1299,7 @@ function frame(now) {
   const dt = Math.min(0.033, (now - lastTime) / 1000);
   lastTime = now;
   globalT += dt;
+  if (bossIntroT > 0) bossIntroT -= dt;
   if (state === 'play' && !paused && !overlayOpen) {
     playTime += dt;
     updatePlayer(dt);

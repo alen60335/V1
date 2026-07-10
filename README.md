@@ -78,8 +78,10 @@
 V1/
 ├── index.html            入口
 ├── style.css             版面
+├── assets/               AI 生成素材（背景/標題/立繪）
 ├── js/
 │   ├── formation.js      陣法規則引擎（純邏輯、可單獨測試）
+│   ├── assets.js         素材載入層（有圖用圖、無圖 fallback）
 │   ├── level.js          關卡地形與生成點
 │   └── game.js           主程式（物理、AI、效果、繪製、HUD）
 ├── tests/
@@ -90,9 +92,26 @@ V1/
 
 ## 美術素材說明
 
-本次 session 未連接 higgsfield MCP，全部視覺（角色、敵人、背景視差、陣法圈、UI）
-以 Canvas 程式化繪製。之後若要換成生成素材，替換 `game.js` 中的
-`drawPlayer`／`drawEnemy`／`drawBackground` 為圖片繪製即可（介面已集中）。
+大圖素材由**本機 Stable Diffusion（Forge / AOM3A3 模型）**生成，放在 `assets/`：
+
+| 檔案 | 用途 |
+|---|---|
+| `bg_cave.png` | 遊戲洞窟背景（水平平鋪＋視差，繪製時壓暗） |
+| `title_scene.png` | 標題畫面大圖 |
+| `boss_portrait.png` | 頭目登場卡＋血條頭像 |
+| `player_portrait.png` | HUD 左上玩家頭像 |
+
+載入集中在 `js/assets.js`；`game.js` 各繪製函式以 `Assets.has(key)` 判斷——
+**圖片載入成功就用圖，失敗自動 fallback 回程式化繪製**，所以刪掉 `assets/` 遊戲仍能跑。
+
+會動的小角色（玩家／小怪／咒師）仍為程式化繪製：AI 難以產生一致且乾淨的小尺寸
+透明動畫幀，程式繪製在此更穩定。之後若要換成 sprite，改 `drawPlayer`／`drawEnemy` 即可。
+
+### 重新生成素材（本機 Forge）
+
+1. 以 `--api` 啟動 Forge（該專案的 `run_api.bat` 已設好，API 在 `127.0.0.1:7860`）。
+2. `POST /sdapi/v1/txt2img`，`override_settings.sd_model_checkpoint = "AOM3A3_orangemixs"`，
+   base64 結果存成上表對應檔名即可（prompt 見 git 歷史的接素材 commit）。
 
 ## 除錯掛鉤
 
