@@ -28,6 +28,101 @@ function beep(freq, dur, type, vol, slide) {
   } catch (e) { /* 無音效環境 */ }
 }
 const ELEM_FREQ = { fire: 392, water: 494, wind: 587, earth: 330 };
+// ---------------- 環境音樂（程序化 BGM：低音鋪底＋回聲旋律＋風噪水滴） ----------------
+const Music = (() => {
+  let started = false, mood = '', master = null, drone1 = null, drone2 = null, droneLp = null, noiseGain = null, delayIn = null;
+  let noteT = 1.5, dripT = 3, beatT = 0;
+  const MOODS = { // 各區域調性
+    cave:   { drone: 55.0,  root: 220.0,  scale: [0, 3, 5, 7, 10], note: [2.6, 5.2], drip: [4, 9],  lp: 200, noise: 0.05 },  // A 小調五聲
+    water:  { drone: 65.41, root: 261.63, scale: [0, 2, 3, 7, 8],  note: [2.2, 4.4], drip: [1.2, 3.5], lp: 260, noise: 0.06 }, // C 幽泉
+    ruin:   { drone: 46.25, root: 185.0,  scale: [0, 1, 5, 6, 10], note: [3.2, 6.4], drip: [7, 13], lp: 150, noise: 0.04 },  // F# 陰暗
+    battle: { drone: 55.0,  root: 220.0,  scale: [0, 2, 3, 5, 7],  note: [0.8, 1.6], drip: [99, 99], lp: 330, noise: 0.05 },
+  };
+  function ensure() {
+    if (started) return;
+    try {
+      if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+      master = AC.createGain(); master.gain.value = 0;
+      master.connect(AC.destination);
+      master.gain.linearRampToValueAtTime(muted ? 0 : 0.42, AC.currentTime + 3); // 緩入
+      // 洞窟回聲
+      delayIn = AC.createDelay(1); delayIn.delayTime.value = 0.42;
+      const fb = AC.createGain(); fb.gain.value = 0.4;
+      const wet = AC.createGain(); wet.gain.value = 0.55;
+      delayIn.connect(fb); fb.connect(delayIn); delayIn.connect(wet); wet.connect(master);
+      // 低音鋪底（雙鋸齒微失諧＋低通）
+      droneLp = AC.createBiquadFilter(); droneLp.type = 'lowpass'; droneLp.frequency.value = 200;
+      const dg = AC.createGain(); dg.gain.value = 0.07;
+      drone1 = AC.createOscillator(); drone1.type = 'sawtooth'; drone1.frequency.value = 55;
+      drone2 = AC.createOscillator(); drone2.type = 'sawtooth'; drone2.frequency.value = 55.3;
+      drone1.connect(droneLp); drone2.connect(droneLp); droneLp.connect(dg); dg.connect(master);
+      drone1.start(); drone2.start();
+      // 風噪（布朗噪音循環）
+      const buf = AC.createBuffer(1, AC.sampleRate * 2, AC.sampleRate);
+      const d = buf.getChannelData(0); let last = 0;
+      for (let i = 0; i < d.length; i++) { const w = Math.random() * 2 - 1; last = (last + 0.02 * w) / 1.02; d[i] = last * 3; }
+      const noise = AC.createBufferSource(); noise.buffer = buf; noise.loop = true;
+      const nlp = AC.createBiquadFilter(); nlp.type = 'lowpass'; nlp.frequency.value = 300;
+      noiseGain = AC.createGain(); noiseGain.gain.value = 0.05;
+      noise.connect(nlp); nlp.connect(noiseGain); noiseGain.connect(master); noise.start();
+      started = true;
+    } catch (e) { /* 無音效環境 */ }
+  }
+  function tone(freq, dur, type, peak, dest) { // 帶包絡的單音，送入回聲
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.type = type; o.frequency.value = freq;
+    const t = AC.currentTime;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(peak, t + dur * 0.15);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(dest || delayIn); g.connect(master);
+    o.start(t); o.stop(t + dur);
+  }
+  function setMood(name) {
+    if (!started || name === mood) return;
+    mood = name;
+    const m = MOODS[name], t = AC.currentTime;
+    drone1.frequency.linearRampToValueAtTime(m.drone, t + 2.5);
+    drone2.frequency.linearRampToValueAtTime(m.drone * 1.006, t + 2.5);
+    droneLp.frequency.linearRampToValueAtTime(m.lp, t + 2.5);
+    noiseGain.gain.linearRampToValueAtTime(m.noise, t + 2.5);
+    noteT = Math.min(noteT, 1);
+  }
+  function update(dt) {
+    if (!started || muted || !mood) return;
+    const m = MOODS[mood];
+    noteT -= dt;
+    if (noteT <= 0) { // 旋律音：調式內隨機音
+      noteT = m.note[0] + Math.random() * (m.note[1] - m.note[0]);
+      const deg = m.scale[Math.floor(Math.random() * m.scale.length)];
+      const oct = Math.random() < 0.3 ? 2 : 1;
+      tone(m.root * Math.pow(2, deg / 12) * oct, 2.4 + Math.random() * 1.6, 'sine', 0.09);
+      if (Math.random() < 0.35) setTimeout(() => { if (!muted) tone(m.root * Math.pow(2, (deg + 7) / 12), 2.2, 'triangle', 0.045); }, 350);
+    }
+    dripT -= dt;
+    if (dripT <= 0) { // 水滴（送回聲）
+      dripT = m.drip[0] + Math.random() * (m.drip[1] - m.drip[0]);
+      const f0 = 1300 + Math.random() * 700;
+      const o = AC.createOscillator(), g = AC.createGain();
+      o.type = 'sine'; o.frequency.setValueAtTime(f0, AC.currentTime);
+      o.frequency.exponentialRampToValueAtTime(f0 * 0.4, AC.currentTime + 0.09);
+      g.gain.setValueAtTime(0.06, AC.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + 0.12);
+      o.connect(g); g.connect(delayIn);
+      o.start(); o.stop(AC.currentTime + 0.13);
+    }
+    if (mood === 'battle') { // 戰鬥低音脈動
+      beatT -= dt;
+      if (beatT <= 0) { beatT = 0.46; tone(MOODS.battle.drone * (Math.random() < 0.25 ? 1.5 : 1), 0.3, 'sine', 0.22, master); }
+    }
+  }
+  function setMuted(mu) {
+    if (!started) return;
+    master.gain.linearRampToValueAtTime(mu ? 0 : 0.42, AC.currentTime + 0.4);
+  }
+  return { ensure, setMood, update, setMuted, get mood() { return mood; }, get started() { return started; } };
+})();
+
 const snd = {
   elem: (el) => beep(ELEM_FREQ[el], 0.12, 'triangle', 0.14),
   bad: () => beep(120, 0.18, 'square', 0.1),
@@ -54,13 +149,19 @@ const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h 
 // ---------------- 世界狀態 ----------------
 let state = 'title'; // title | play | dead | victory
 let paused = false, overlayOpen = false, mapOpen = false;
-const explored = new Set(); // 已探索區塊（6x6 格為一塊）
-const CHUNK = 6;
-function markExplored() {
-  const ctx2 = Math.floor(cx(player) / TILE / CHUNK), cty = Math.floor(cy(player) / TILE / CHUNK);
-  for (let dy = -1; dy <= 1; dy++) for (let dx = -2; dx <= 2; dx++) explored.add((ctx2 + dx) + ',' + (cty + dy));
+let mapPanX = 0, mapPanY = 0; // 地圖平移（格座標）
+const visitedRooms = new Set(); // 走訪過的房間索引（跨重生保留）
+function roomAt(tx, ty) {
+  for (let i = 0; i < L.rooms.length; i++) {
+    const b = L.rooms[i].b;
+    if (tx >= b[0] - 0.5 && tx <= b[2] + 1.5 && ty >= b[1] - 0.5 && ty <= b[3] + 1.5) return i;
+  }
+  return -1;
 }
-const exploredAt = (tx, ty) => explored.has(Math.floor(tx / CHUNK) + ',' + Math.floor(ty / CHUNK));
+function markExplored() {
+  const r = roomAt(cx(player) / TILE, cy(player) / TILE);
+  if (r >= 0) visitedRooms.add(r);
+}
 let playTime = 0, shakeT = 0, shakeMag = 0, globalT = 0, bossIntroT = 0, goalMsgT = -9;
 let cam = { x: 0, y: 0 };
 let enemies = [], projectiles = [], zones = [], traps = [], blasts = [], particles = [], pickups = [], messages = [];
@@ -239,8 +340,8 @@ window.addEventListener('keydown', (e) => {
 
   if (e.code === 'KeyP') { paused = !paused; return; }
   if (e.code === 'Tab') { overlayOpen = !overlayOpen; mapOpen = false; return; }
-  if (e.code === 'KeyM') { mapOpen = !mapOpen; overlayOpen = false; return; }
-  if (e.code === 'KeyN') { muted = !muted; pushMsg(muted ? '靜音' : '音效開啟', 1.2); return; }
+  if (e.code === 'KeyM') { mapOpen = !mapOpen; overlayOpen = false; if (mapOpen) { mapPanX = cx(player) / TILE; mapPanY = cy(player) / TILE; } return; }
+  if (e.code === 'KeyN') { muted = !muted; Music.setMuted(muted); pushMsg(muted ? '靜音' : '音效開啟', 1.2); return; }
   if (paused || mapOpen) return;
 
   // Shift：切換破陣模式（按一次進入，確認後或再按一次退出）
@@ -1578,41 +1679,125 @@ function drawBossIntro() {
   ctx.fillText(bossIntroData.name.split('').join(' '), px - 16, VH / 2 + 22);
   ctx.restore();
 }
+function rr(x, y, w, h, r) { // 圓角矩形路徑
+  const q = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + q, y);
+  ctx.arcTo(x + w, y, x + w, y + h, q);
+  ctx.arcTo(x + w, y + h, x, y + h, q);
+  ctx.arcTo(x, y + h, x, y, q);
+  ctx.arcTo(x, y, x + w, y, q);
+  ctx.closePath();
+}
 function drawMap() {
-  ctx.fillStyle = 'rgba(6,5,14,0.94)';
-  ctx.fillRect(20, 40, VW - 40, VH - 80);
-  ctx.strokeStyle = '#57cfae'; ctx.strokeRect(20.5, 40.5, VW - 40, VH - 80);
-  ctx.fillStyle = '#9fe8ff';
-  ctx.font = 'bold 18px "Microsoft JhengHei", sans-serif';
-  ctx.textAlign = 'left';
-  ctx.fillText('洞窟輿圖（M 關閉）', 44, 72);
-  const sc = 2.1;
-  const ox = VW / 2 - (L.W * sc) / 2, oy = VH / 2 - (L.H * sc) / 2 + 14;
-  // 地形（僅顯示探索過的區塊）
-  for (let ty = 0; ty < L.H; ty++) for (let tx = 0; tx < L.W; tx++) {
-    if (!exploredAt(tx, ty)) continue;
-    const v = L.at(tx, ty);
-    ctx.fillStyle = v === 1 ? '#454064' : v === 2 ? '#8d94a8' : '#12101f';
-    ctx.fillRect(ox + tx * sc, oy + ty * sc, sc, sc);
+  const PX = 24, PY = 40, PW = VW - 48, PH = VH - 86;
+  // 墨藍圖紙底
+  const bg = ctx.createLinearGradient(0, PY, 0, PY + PH);
+  bg.addColorStop(0, 'rgba(10,14,26,0.97)'); bg.addColorStop(1, 'rgba(7,9,18,0.97)');
+  ctx.fillStyle = bg; ctx.fillRect(PX, PY, PW, PH);
+  ctx.strokeStyle = '#5a6b8c'; ctx.lineWidth = 2; ctx.strokeRect(PX + 3.5, PY + 3.5, PW - 7, PH - 7);
+  ctx.strokeStyle = 'rgba(90,107,140,0.4)'; ctx.lineWidth = 1; ctx.strokeRect(PX + 8.5, PY + 8.5, PW - 17, PH - 17);
+
+  const k = 3.6; // 每格像素
+  const vx = PX + PW / 2 - mapPanX * k, vy = PY + PH / 2 - mapPanY * k;
+  const mx = (tx) => vx + tx * k, my = (ty) => vy + ty * k;
+
+  ctx.save();
+  rr(PX + 10, PY + 10, PW - 20, PH - 20, 6); ctx.clip();
+
+  // 房間（走訪過才顯現；HK 式輪廓房）
+  const curRoom = roomAt(cx(player) / TILE, cy(player) / TILE);
+  const areaSeen = [false, false, false];
+  for (let i = 0; i < L.rooms.length; i++) {
+    if (!visitedRooms.has(i)) continue;
+    const rm = L.rooms[i]; areaSeen[rm.a] = true;
+    const b = rm.b;
+    const x = mx(b[0]), y = my(b[1]), w = (b[2] - b[0] + 1) * k, h = (b[3] - b[1] + 1) * k;
+    rr(x, y, w, h, 5);
+    ctx.fillStyle = rm.secret ? '#232c44' : '#1b2438';
+    ctx.fill();
+    const col = L.areas[rm.a].color;
+    ctx.strokeStyle = col; ctx.lineWidth = i === curRoom ? 2.5 : 1.5;
+    ctx.globalAlpha = i === curRoom ? (0.8 + 0.2 * Math.sin(globalT * 5)) : 0.75;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   }
-  const dot = (tx, ty, col, r) => { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(ox + tx * sc, oy + ty * sc, r || 3.5, 0, Math.PI * 2); ctx.fill(); };
-  // 圖標（在探索範圍內才顯示）
-  for (const c of checkpoints) if (c.lit) dot(c.x / TILE + 0.5, c.y / TILE - 1, '#ffe08a');
-  for (const b of barriers) if (!b.broken && exploredAt(b.x, b.y1)) { ctx.fillStyle = F.INFO[b.seq[0]].color; ctx.fillRect(ox + b.x * sc, oy + b.y0 * sc, sc, (b.y1 - b.y0 + 1) * sc); }
-  for (const s of seals) if (!deadBosses.has(s.boss) && exploredAt(s.x, s.y1)) { ctx.fillStyle = '#c080ff'; ctx.fillRect(ox + s.x * sc, oy + s.y0 * sc, sc, (s.y1 - s.y0 + 1) * sc); }
-  for (const e of enemies) if (e.kind === 'boss' && !e.dead && exploredAt(e.x / TILE, e.y / TILE + 1)) dot(e.x / TILE + 0.7, e.y / TILE + 1, '#ff5060', 4);
-  for (const p of pickups) if (p.type !== 'manaOrb' && exploredAt(p.x / TILE, p.y / TILE)) dot(p.x / TILE, p.y / TILE, '#9fe8ff', 2.5);
-  if (goal && exploredAt(goal.x / TILE, goal.y / TILE - 1)) dot(goal.x / TILE + 0.5, goal.y / TILE - 1.5, deadBosses.has('b3') ? '#c080ff' : 'rgba(192,128,255,0.4)', 4);
-  // 玩家位置（閃爍）
-  if (Math.floor(globalT * 3) % 2 === 0) dot(cx(player) / TILE, cy(player) / TILE, '#ffffff', 4);
-  // 圖例
-  ctx.font = '12px "Microsoft JhengHei", sans-serif';
+  // 區域名稱（該區任一房間走訪過即顯示）
+  ctx.font = 'bold 15px "Microsoft JhengHei", serif';
+  ctx.textAlign = 'center';
+  const areaBounds = [[2, 214], [214, 366], [366, 414]];
+  for (let a = 0; a < 3; a++) {
+    if (!areaSeen[a]) continue;
+    ctx.fillStyle = L.areas[a].color;
+    ctx.globalAlpha = 0.9;
+    ctx.fillText(L.areas[a].name, mx((areaBounds[a][0] + areaBounds[a][1]) / 2), my(8));
+    ctx.globalAlpha = 1;
+  }
+  // 圖標（僅在其所屬房間走訪過時顯示）
+  const seen = (tx, ty) => visitedRooms.has(roomAt(tx, ty));
+  for (const c of checkpoints) if (c.lit) { // 祭壇：燈座
+    const x = mx(c.x / TILE + 0.5), y = my(c.y / TILE - 1.2);
+    ctx.fillStyle = '#ffe08a';
+    ctx.beginPath(); ctx.arc(x, y - 2, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,224,138,0.3)';
+    ctx.beginPath(); ctx.arc(x, y - 2, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#a89468'; ctx.fillRect(x - 3, y + 1, 6, 3);
+  }
+  for (const b of barriers) if (!b.broken && seen(b.x, (b.y0 + b.y1) / 2)) {
+    ctx.fillStyle = F.INFO[b.seq[0]].color;
+    ctx.fillRect(mx(b.x) - 1, my(b.y0), k + 2, (b.y1 - b.y0 + 1) * k);
+  }
+  for (const s of seals) if (!deadBosses.has(s.boss) && seen(s.x - 1, (s.y0 + s.y1) / 2)) {
+    ctx.fillStyle = '#c080ff';
+    ctx.fillRect(mx(s.x) - 1, my(s.y0), k + 2, (s.y1 - s.y0 + 1) * k);
+  }
+  for (const e of enemies) if (e.kind === 'boss' && !e.dead && seen(e.x / TILE, e.y / TILE + 1)) { // 頭目：角紋章
+    const x = mx(e.x / TILE + 0.7), y = my(e.y / TILE + 1);
+    ctx.fillStyle = '#ff5060';
+    ctx.beginPath(); ctx.moveTo(x, y - 6); ctx.lineTo(x + 5, y + 4); ctx.lineTo(x - 5, y + 4); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#ff9db0'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x - 4, y - 4); ctx.lineTo(x - 7, y - 9); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x + 4, y - 4); ctx.lineTo(x + 7, y - 9); ctx.stroke();
+  }
+  for (const p of pickups) if (p.type !== 'manaOrb' && seen(p.x / TILE, p.y / TILE)) {
+    ctx.fillStyle = p.type === 'life' ? '#ff8fa8' : '#9fe8ff';
+    const x = mx(p.x / TILE), y = my(p.y / TILE);
+    ctx.save(); ctx.translate(x, y); ctx.rotate(Math.PI / 4); ctx.fillRect(-2.5, -2.5, 5, 5); ctx.restore();
+  }
+  if (goal && seen(goal.x / TILE, goal.y / TILE - 1)) { // 歸環之門
+    const x = mx(goal.x / TILE + 0.5), y = my(goal.y / TILE - 2);
+    ctx.strokeStyle = deadBosses.has('b3') ? '#c080ff' : 'rgba(192,128,255,0.45)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x, y, 5, Math.PI, 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x - 5, y); ctx.lineTo(x - 5, y + 5); ctx.moveTo(x + 5, y); ctx.lineTo(x + 5, y + 5); ctx.stroke();
+  }
+  // 玩家標記（白菱形脈動）
+  {
+    const x = mx(cx(player) / TILE), y = my(cy(player) / TILE);
+    const s = 4 + Math.sin(globalT * 5) * 1.2;
+    ctx.save(); ctx.translate(x, y); ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(-s / 2, -s / 2, s, s);
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(x, y, 8 + Math.sin(globalT * 3) * 2, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.restore(); // 解除 clip
+
+  // 標題與圖例
+  ctx.fillStyle = '#c8d8f0';
+  ctx.font = 'bold 18px "Microsoft JhengHei", serif';
   ctx.textAlign = 'left';
-  const legend = [['#ffffff', '你'], ['#ffe08a', '祭壇'], ['#d9a441', '結界'], ['#c080ff', '封印／門'], ['#ff5060', '頭目'], ['#9fe8ff', '寶物']];
+  ctx.fillText('❖ 洞窟輿圖', PX + 22, PY + 30);
+  ctx.font = '12px "Microsoft JhengHei", sans-serif';
+  ctx.fillStyle = '#8a9ab8';
+  ctx.textAlign = 'right';
+  ctx.fillText('方向鍵平移　M 關閉', PX + PW - 20, PY + 28);
+  const legend = [['#ffffff', '你'], ['#ffe08a', '祭壇'], ['#d9a441', '結界'], ['#c080ff', '封印'], ['#ff5060', '頭目'], ['#9fe8ff', '寶物']];
+  ctx.textAlign = 'left';
   legend.forEach((lg, i) => {
-    const lx = 44 + i * 110;
-    ctx.fillStyle = lg[0]; ctx.beginPath(); ctx.arc(lx, VH - 62, 4, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#dfe6ff'; ctx.fillText(lg[1], lx + 10, VH - 58);
+    const lx = PX + 30 + i * 100;
+    ctx.fillStyle = lg[0];
+    ctx.save(); ctx.translate(lx, VH - 60); ctx.rotate(Math.PI / 4); ctx.fillRect(-3, -3, 6, 6); ctx.restore();
+    ctx.fillStyle = '#c8d8f0'; ctx.fillText(lg[1], lx + 12, VH - 56);
   });
 }
 function drawScreens() {
@@ -1713,6 +1898,22 @@ function frame(now) {
   lastTime = now;
   globalT += dt;
   if (bossIntroT > 0) bossIntroT -= dt;
+  // 環境音樂：進入遊戲即啟動，依區域/戰鬥切換氛圍
+  if (state === 'play') {
+    Music.ensure();
+    const inBattle = enemies.some(e => e.kind === 'boss' && e.aggro && !e.dead);
+    Music.setMood(inBattle ? 'battle' : player.x < 214 * TILE ? 'cave' : player.x < 366 * TILE ? 'water' : 'ruin');
+    Music.update(dt);
+  }
+  // 地圖平移
+  if (mapOpen) {
+    const ps = 70 * dt;
+    if (keys.ArrowLeft) mapPanX -= ps;
+    if (keys.ArrowRight) mapPanX += ps;
+    if (keys.ArrowUp) mapPanY -= ps;
+    if (keys.ArrowDown) mapPanY += ps;
+    mapPanX = clamp(mapPanX, 0, L.W); mapPanY = clamp(mapPanY, 0, L.H);
+  }
   if (state === 'play' && !paused && !overlayOpen && !mapOpen) {
     playTime += dt;
     markExplored();
@@ -1746,6 +1947,7 @@ window.RingWalker = {
     barriers: () => barriers,
     messages: () => messages,
     deadBosses: () => Array.from(deadBosses),
+    music: () => ({ started: Music.started, mood: Music.mood }),
   },
 };
 })();
