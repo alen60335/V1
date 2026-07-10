@@ -65,7 +65,7 @@ const player = {
   x: 0, y: 0, w: 18, h: 40, vx: 0, vy: 0, facing: 1, grounded: false,
   hp: 100, maxHp: 100, mp: 100, maxMp: 100,
   slots: 3, breakSlots: 3,
-  seq: [], breakSeq: [], channel: null,
+  seq: [], breakSeq: [], channel: null, breakMode: false,
   iframes: 0, coyote: 0, jumpBuf: 0,
   dashT: 0, dashDir: 1, dashDmg: 0, dashHit: null, ghostT: 0,
   healAura: 0, healRate: 5, anchor: null,
@@ -167,7 +167,7 @@ function initWorld() {
 }
 function respawn() {
   player.hp = player.maxHp; player.mp = player.maxMp; player.dead = false;
-  player.vx = 0; player.vy = 0; player.seq = []; player.breakSeq = []; player.channel = null;
+  player.vx = 0; player.vy = 0; player.seq = []; player.breakSeq = []; player.channel = null; player.breakMode = false;
   player.dashT = 0; player.healAura = 0; player.iframes = 1.5; player.anchor = null;
   player.x = player.checkpoint.x; player.y = player.checkpoint.y;
   projectiles = []; zones = []; traps = []; blasts = [];
@@ -195,15 +195,18 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyM') { muted = !muted; pushMsg(muted ? '靜音' : '音效開啟', 1.2); return; }
   if (paused) return;
 
+  // Shift：切換破陣模式（按一次進入，確認後或再按一次退出）
+  if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') { toggleBreakMode(); return; }
+
   const elem = KEY_ELEM[e.code];
-  if (elem) { if (e.shiftKey) appendBreak(elem); else appendCast(elem); return; }
-  if (e.code === 'Enter') { if (e.shiftKey) attemptBreak(); else sealFormation(); return; }
+  if (elem) { if (player.breakMode) appendBreak(elem); else appendCast(elem); return; }
+  if (e.code === 'Space') { if (player.breakMode) attemptBreak(); else sealFormation(); return; }
   if (e.code === 'Backspace') {
-    if (e.shiftKey) { player.breakSeq.pop(); } else if (!player.channel) { player.seq.pop(); }
+    if (player.breakMode) { player.breakSeq.pop(); } else if (!player.channel) { player.seq.pop(); }
     return;
   }
-  if (e.code === 'KeyX') { doMelee(); return; }
-  if (e.code === 'Space' || e.code === 'ArrowUp') { player.jumpBuf = 0.12; return; }
+  if (e.code === 'KeyC') { doMelee(); return; }
+  if (e.code === 'KeyX' || e.code === 'ArrowUp') { player.jumpBuf = 0.12; return; }
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
@@ -218,9 +221,9 @@ function appendCast(elem) {
 function sealFormation() {
   if (player.channel || player.seq.length === 0) return;
   const err = F.checkClosure(player.seq);
-  if (err) { snd.bad(); pushMsg(err, 1.8); return; }
+  if (err) { snd.bad(); pushMsg(err, 1.8); player.seq = []; return; }
   const cost = player.seq.length * 7;
-  if (player.mp < cost) { snd.bad(); pushMsg('靈力不足（需要 ' + cost + '）', 1.6); return; }
+  if (player.mp < cost) { snd.bad(); pushMsg('靈力不足（需要 ' + cost + '）', 1.6); player.seq = []; return; }
   player.mp -= cost;
   const seq = player.seq.slice();
   player.seq = [];
@@ -311,9 +314,17 @@ function breakTarget() {
   }
   return best;
 }
+// 破陣模式切換：按一次 Shift 進入，元素改輸入到破陣序列
+function toggleBreakMode() {
+  player.breakMode = !player.breakMode;
+  player.breakSeq = [];
+  beep(player.breakMode ? 320 : 200, 0.09, 'square', 0.1);
+  pushMsg(player.breakMode ? '破陣模式：輸入克制序列，Space 發動（Shift 退出）' : '退出破陣模式', 1.4);
+}
 function attemptBreak() {
+  if (player.breakSeq.length === 0) { player.breakMode = false; pushMsg('退出破陣模式', 1); return; }
   const t = breakTarget();
-  if (!t) { snd.bad(); pushMsg('範圍內沒有可破解的陣', 1.5); player.breakSeq = []; return; }
+  if (!t) { snd.bad(); pushMsg('範圍內沒有可破解的陣', 1.5); player.breakSeq = []; player.breakMode = false; return; }
   if (F.matchesRotation(player.breakSeq, t.breakSeq)) {
     snd.breakOk();
     burst(t.cx, t.cy, '#ffffff', 30, 220, 0.8);
@@ -329,6 +340,7 @@ function attemptBreak() {
     pushMsg('破陣失敗——序列不符', 1.6);
   }
   player.breakSeq = [];
+  player.breakMode = false; // 成功或失敗都跳回一般模式
 }
 
 // ---------------- 近身攻擊 ----------------
@@ -488,7 +500,7 @@ function updatePlayer(dt) {
       player.vy = JUMP_V; player.jumpBuf = 0; player.coyote = 0;
       beep(240, 0.08, 'sine', 0.05, 120);
     }
-    if (player.vy < 0 && !(keys.Space || keys.ArrowUp)) player.vy += GRAV * 0.9 * dt; // 短按小跳
+    if (player.vy < 0 && !(keys.KeyX || keys.ArrowUp)) player.vy += GRAV * 0.9 * dt; // 短按小跳
     moveEntity(player, dt);
   }
 
@@ -1038,7 +1050,7 @@ function drawHud() {
   // 施放序列（左下）
   ctx.textAlign = 'left';
   ctx.fillStyle = '#aeb8e8';
-  ctx.fillText('施放陣列（A火 S水 D風 F土 → Enter 起陣）', 16, VH - 58);
+  ctx.fillText('施放陣列（A火 S水 D風 F土 → Space 起陣）', 16, VH - 58);
   for (let i = 0; i < player.slots; i++) {
     const x = 26 + i * 32, y = VH - 34;
     if (i < player.seq.length) drawGlyph(player.seq[i], x, y, 12);
@@ -1051,12 +1063,12 @@ function drawHud() {
   }
   // 破陣序列（右下）
   ctx.textAlign = 'right';
-  ctx.fillStyle = '#aeb8e8';
-  ctx.fillText('破陣序列（Shift+元素鍵 → Shift+Enter）', VW - 16, VH - 58);
+  ctx.fillStyle = player.breakMode ? '#ff9db0' : '#8a93bf';
+  ctx.fillText(player.breakMode ? '● 破陣模式 —— Space 發動、Shift 退出' : '破陣（按 Shift 進入破陣模式）', VW - 16, VH - 58);
   for (let i = 0; i < player.breakSlots; i++) {
     const x = VW - 26 - (player.breakSlots - 1 - i) * 32, y = VH - 34;
     if (i < player.breakSeq.length) drawGlyph(player.breakSeq[i], x, y, 12);
-    else { ctx.strokeStyle = 'rgba(174,184,232,0.4)'; ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.stroke(); }
+    else { ctx.strokeStyle = player.breakMode ? 'rgba(255,157,176,0.85)' : 'rgba(174,184,232,0.4)'; ctx.lineWidth = player.breakMode ? 2 : 1; ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.stroke(); ctx.lineWidth = 1; }
   }
   // 頭目血條
   if (bossAggro && bossRef && !bossRef.dead) {
@@ -1085,7 +1097,7 @@ function drawOverlay() {
   ctx.fillText('陣式總覽（Tab 關閉）', 64, 62);
   ctx.font = '13px "Microsoft JhengHei", sans-serif';
   ctx.fillStyle = '#8fe0c0';
-  ctx.fillText('施放鍵：A火　S水　D風　F土　（破陣：按住 Shift＋同鍵）', 64, 80);
+  ctx.fillText('施放鍵：A火　S水　D風　F土　（跳 X・攻擊 C・起陣 Space）', 64, 80);
   ctx.font = '14px "Microsoft JhengHei", sans-serif';
   const colL = [
     ['#ff8866', '攻・火為首'],
@@ -1126,7 +1138,7 @@ function drawOverlay() {
     [null, ''],
     ['#c2ffd9', '破陣'],
     [null, '・把對方序列每個元素換成克制它的元素'],
-    [null, '・Shift+元素鍵輸入，Shift+Enter 發動'],
+    [null, '・按 Shift 進破陣模式，輸入後 Space 發動'],
     [null, '・陣會旋轉——從任一位置讀出週期皆可'],
   ];
   colR.forEach((ln, i) => {
@@ -1147,9 +1159,9 @@ function drawScreens() {
     ctx.fillStyle = '#dfe6ff';
     ctx.font = '15px "Microsoft JhengHei", sans-serif';
     const lines = [
-      '移動 ←→　跳躍 Space／↑　法杖 X',
-      '施放：A火 S水 D風 F土 輸入元素，Enter 起陣',
-      '破陣：Shift+元素鍵 輸入克制序列，Shift+Enter 發動',
+      '移動 ←→　跳躍 X　法杖 C',
+      '施放：A火 S水 D風 F土 輸入元素，Space 起陣',
+      '破陣：按 Shift 進入破陣模式，輸入克制序列後 Space 發動',
       'Tab 陣式表　Backspace 撤銷輸入',
     ];
     lines.forEach((ln, i) => ctx.fillText(ln, VW / 2, 270 + i * 28));
@@ -1212,7 +1224,7 @@ function render() {
     ctx.fillRect(p.x - cam.x - p.size / 2, p.y - cam.y - p.size / 2, p.size, p.size);
   }
   ctx.globalAlpha = 1;
-  if (state === 'play' && player.breakSeq.length > 0) drawBreakReticle();
+  if (state === 'play' && (player.breakMode || player.breakSeq.length > 0)) drawBreakReticle();
   drawSignPanels();
   ctx.restore();
   if (state !== 'title') drawHud();

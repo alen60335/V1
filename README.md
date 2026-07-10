@@ -10,22 +10,26 @@
 
 ## 操作
 
-控制採「空洞騎士式」：方向鍵移動、Space 跳、X 攻擊；元素鍵在左手 home row（A S D F）。
+控制採「空洞騎士式」左手動作叢集：右手方向鍵移動，左手 A S D F 打元素、X 跳、C 攻擊、Space 起陣。破陣是**模式切換**——按一次 Shift 進入破陣模式，元素改輸入到破陣序列，Space 發動後（不論成敗）自動退出。
 
 | 動作 | 按鍵 |
 |---|---|
 | 移動 | ← → |
-| 跳躍 | Space 或 ↑ |
-| 法杖揮擊（弱近戰） | X |
+| 跳躍 | X（或 ↑） |
+| 法杖揮擊（弱近戰） | C |
 | 輸入施放元素 | A火 S水 D風 F土 |
-| 起陣（施放） | Enter |
-| 輸入破陣元素 | Shift + A/S/D/F |
-| 發動破陣 | Shift + Enter |
-| 撤銷上一個輸入 | Backspace（Shift+Backspace 撤銷破陣輸入） |
+| 起陣（施放） | Space |
+| 進入／退出破陣模式 | Shift |
+| 輸入破陣元素 | 破陣模式下 A/S/D/F |
+| 發動破陣 | 破陣模式下 Space |
+| 撤銷上一個輸入 | Backspace |
 | 陣式表 | Tab |
 | 暫停／靜音 | P／M |
 
-> 元素鍵映射集中在 `js/game.js` 的 `KEY_ELEM`，攻擊鍵在 keydown 的 `KeyX` 判斷、移動在 `updatePlayer` 的 `ArrowLeft/ArrowRight`，要改綁定改這幾處即可。
+- **起陣**後不論成功或失敗，都會清空目前輸入的元素。
+- **破陣**確認後（成功或失敗）都會清空破陣序列並跳回一般模式；破陣模式時 HUD 右下會亮起粉紅「● 破陣模式」。
+
+> 綁定集中在 `js/game.js`：元素在 `KEY_ELEM`、跳/攻擊/確認在 keydown 的 `KeyX`/`KeyC`/`Space` 判斷、破陣模式切換在 `toggleBreakMode`、移動在 `updatePlayer` 的 `ArrowLeft/ArrowRight`。
 
 ## 流程（約 15～25 分鐘）
 
