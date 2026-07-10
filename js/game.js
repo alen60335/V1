@@ -326,9 +326,9 @@ function respawn() {
 
 // ---------------- 輸入 ----------------
 const keys = {};
-// 元素鍵：火=A 水=S 風=D 土=F（左手 home row）。移動＝方向鍵、跳=X、攻擊=C、確認=Space。
+// 元素鍵：火=A 水=S 土=D 風=F（左手 home row）。移動＝方向鍵、跳=X、攻擊=C、確認=Space。
 // 破陣＝按一次 Shift 進入破陣模式（元素改輸入破陣序列），Space 發動後自動退出。
-const KEY_ELEM = { KeyA: 'fire', KeyS: 'water', KeyD: 'wind', KeyF: 'earth' };
+const KEY_ELEM = { KeyA: 'fire', KeyS: 'water', KeyD: 'earth', KeyF: 'wind' };
 window.addEventListener('keydown', (e) => {
   if (['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Backspace'].includes(e.code)) e.preventDefault();
   if (e.repeat) { keys[e.code] = true; return; }
@@ -1542,7 +1542,7 @@ function drawHud() {
   // 施放序列（左下）
   ctx.textAlign = 'left';
   ctx.fillStyle = '#aeb8e8';
-  ctx.fillText('施放陣列（A火 S水 D風 F土 → Space 起陣）', 16, VH - 58);
+  ctx.fillText('施放陣列（A火 S水 D土 F風 → Space 起陣）', 16, VH - 58);
   for (let i = 0; i < player.slots; i++) {
     const x = 26 + i * 32, y = VH - 34;
     if (i < player.seq.length) drawGlyph(player.seq[i], x, y, 12);
@@ -1605,25 +1605,25 @@ function drawOverlay() {
   ctx.fillText('陣式總覽（Tab 關閉）', 64, 62);
   ctx.font = '13px "Microsoft JhengHei", sans-serif';
   ctx.fillStyle = '#8fe0c0';
-  ctx.fillText('施放鍵：A火　S水　D風　F土　（跳 X・攻擊 C・起陣 Space）', 64, 80);
+  ctx.fillText('施放鍵：A火　S水　D土　F風　（跳 X・攻擊 C・起陣 Space）', 64, 80);
   ctx.font = '14px "Microsoft JhengHei", sans-serif';
   const colL = [
     ['#ff8866', '攻・火為首'],
-    [null, '　延燒（持續灼燒）……… A F S'],
-    [null, '　火種（燃燒地帶）……… A F'],
-    [null, '　追蹤火球 ………………… A D F'],
+    [null, '　延燒（持續灼燒）……… A D S'],
+    [null, '　火種（燃燒地帶）……… A D'],
+    [null, '　追蹤火球 ………………… A F D'],
     ['#7fd0ff', '療・水為首'],
-    [null, '　爆療（瞬間大量）……… S A D'],
-    [null, '　流療（治療跟隨）……… S D'],
-    [null, '　泉湧（回血區）………… S A F'],
+    [null, '　爆療（瞬間大量）……… S A F'],
+    [null, '　流療（治療跟隨）……… S F'],
+    [null, '　泉湧（回血區）………… S A D'],
     ['#f2d49b', '陷・土為首（延遲觸發）'],
-    [null, '　爆破陷阱 ………………… F A'],
-    [null, '　回復陷阱 ………………… F S A'],
-    [null, '　感應陷阱（自動）……… F S D'],
+    [null, '　爆破陷阱 ………………… D A'],
+    [null, '　回復陷阱 ………………… D S A'],
+    [null, '　感應陷阱（自動）……… D S F'],
     ['#c2ffd9', '移・風為首'],
-    [null, '　衝刺（撞擊傷害）……… D F A'],
-    [null, '　流體位移（殘影無敵）… D S'],
-    [null, '　錨點傳送 ………………… D F S'],
+    [null, '　衝刺（撞擊傷害）……… F D A'],
+    [null, '　流體位移（殘影無敵）… F S'],
+    [null, '　錨點傳送 ………………… F D S'],
   ];
   colL.forEach((ln, i) => {
     ctx.fillStyle = ln[0] || '#dfe6ff';
@@ -1637,11 +1637,11 @@ function drawOverlay() {
     [null, '・序列首尾必須接成圓（Space 起陣時檢查）'],
     [null, '・主效果＝第一個有效元素'],
     [null, '・間接元素只作橋接，不生效果'],
-    [null, '　（例 A F S：土被 火/水 夾住而透明化）'],
+    [null, '　（例 A D S：土被 火/水 夾住而透明化）'],
     [null, ''],
     ['#ff9db0', '反噬陣'],
     [null, '・兩個以上「同元素」間接元素即成反噬'],
-    [null, '・例：A D S D F（兩個風皆為間接）'],
+    [null, '・例：A F S F D（兩個風皆為間接）'],
     [null, '・反噬陣被破時，破陣者受到反傷'],
     [null, ''],
     ['#c2ffd9', '破陣'],
@@ -1815,7 +1815,7 @@ function drawScreens() {
     ctx.font = '15px "Microsoft JhengHei", sans-serif';
     const lines = [
       '移動 ←→　跳躍 X　法杖 C',
-      '施放：A火 S水 D風 F土 輸入元素，Space 起陣',
+      '施放：A火 S水 D土 F風 輸入元素，Space 起陣',
       '破陣：按 Shift 進入破陣模式，輸入克制序列後 Space 發動',
       'Tab 陣式表　M 地圖　Backspace 撤銷輸入',
     ];
