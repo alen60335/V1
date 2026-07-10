@@ -57,8 +57,9 @@ let paused = false, overlayOpen = false;
 let playTime = 0, shakeT = 0, shakeMag = 0, globalT = 0, bossIntroT = 0, goalMsgT = -9;
 let cam = { x: 0, y: 0 };
 let enemies = [], projectiles = [], zones = [], traps = [], blasts = [], particles = [], pickups = [], messages = [];
-let barriers = [], checkpoints = [], signs = [], goal = null;
-let bossRef = null, bossAggro = false, bossDead = false;
+let barriers = [], checkpoints = [], signs = [], goal = null, seals = [];
+const deadBosses = new Set();   // 已擊殺頭目（跨重生保留）
+let bossIntroData = null;       // 頭目登場卡 {name, sub, img}
 const collected = new Set();
 
 const player = {
@@ -88,6 +89,10 @@ function tileSolid(tx, ty) {
   for (let i = 0; i < barriers.length; i++) {
     const b = barriers[i];
     if (!b.broken && tx === b.x && ty >= b.y0 && ty <= b.y1) return true;
+  }
+  for (let i = 0; i < seals.length; i++) {
+    const s = seals[i];
+    if (!deadBosses.has(s.boss) && tx === s.x && ty >= s.y0 && ty <= s.y1) return true;
   }
   return false;
 }
@@ -136,23 +141,44 @@ function makeWalker(d) {
     hp: 30, maxHp: 30, speed: 55, touchDmg: 12, flash: 0, burn: null, dead: false, animT: Math.random() * 9 };
 }
 function makeCaster(d) {
+  const hp = d.hp || 45;
   return { kind: 'caster', x: d.x * TILE + 3, y: d.floor * TILE - 36, w: 26, h: 36, vx: 0, vy: 0,
-    hp: 45, maxHp: 45, touchDmg: 10, state: 'idle', channel: null, cool: 1 + Math.random(), stunT: 0,
-    pool: d.pool, buildSpd: 0.5, flash: 0, burn: null, dead: false, animT: Math.random() * 9 };
+    hp, maxHp: hp, touchDmg: 10, state: 'idle', channel: null, cool: 1 + Math.random(), stunT: 0,
+    pool: d.pool, buildSpd: 0.5, healer: !!d.healer, elite: !!d.elite,
+    flash: 0, burn: null, dead: false, animT: Math.random() * 9 };
 }
+function makeFlyer(d) {
+  const px = d.x * TILE, py = d.y * TILE;
+  return { kind: 'flyer', x: px, y: py, w: 22, h: 16, vx: 0, vy: 0, homeX: px + 11, homeY: py + 8,
+    hp: 22, maxHp: 22, touchDmg: 10, t: Math.random() * 9, flash: 0, burn: null, dead: false, animT: Math.random() * 9 };
+}
+function makeShell(d) {
+  return { kind: 'shell', x: d.x * TILE + 1, y: d.floor * TILE - 26, w: 30, h: 26, vx: 0, vy: 0, dir: -1,
+    hp: 70, maxHp: 70, speed: 38, touchDmg: 16, armor: true, flash: 0, burn: null, dead: false, animT: Math.random() * 9 };
+}
+const BOSS_DEFS = {
+  b1: { name: '深陣咒主', sub: '深層陣殿之主', img: 'bossPortrait',  hp: 240, touchDmg: 16, buildSpd: 0.38, cool: 1.6, w: 38, h: 54, healAmt: 50 },
+  b2: { name: '疾風梟主', sub: '幽泉水道之王', img: 'boss2Portrait', hp: 300, touchDmg: 14, buildSpd: 0.42, cool: 1.8, w: 46, h: 40, fly: true },
+  b3: { name: '祖陣墟主', sub: '萬陣之源',     img: 'boss3Portrait', hp: 420, touchDmg: 18, buildSpd: 0.34, cool: 1.4, w: 44, h: 60, healAmt: 80 },
+};
 function makeBoss(d) {
-  return { kind: 'boss', x: d.x * TILE, y: d.floor * TILE - 54, w: 38, h: 54, vx: 0, vy: 0,
-    hp: 240, maxHp: 240, touchDmg: 16, state: 'idle', channel: null, cool: 1.5, stunT: 0,
-    buildSpd: 0.38, healCd: 0, castIdx: 0, flash: 0, burn: null, dead: false, animT: 0 };
+  const B = BOSS_DEFS[d.id];
+  return { kind: 'boss', id: d.id, name: B.name, sub: B.sub, img: B.img, fly: !!B.fly,
+    x: d.x * TILE, y: d.floor * TILE - B.h, w: B.w, h: B.h, vx: 0, vy: 0,
+    hp: B.hp, maxHp: B.hp, touchDmg: B.touchDmg, buildSpd: B.buildSpd, coolBase: B.cool, healAmt: B.healAmt || 0,
+    state: 'idle', channel: null, cool: 1.5, stunT: 0, healCd: 0, minionCd: 0, castIdx: 0,
+    aggro: false, aggroX: d.aggroX * TILE, flash: 0, burn: null, dead: false, animT: 0, eDashT: 0, eDashVx: 0, eDashVy: 0 };
 }
 function spawnEnemies() {
   enemies = [];
   for (const d of L.spawns.walkers) enemies.push(makeWalker(d));
+  for (const d of L.spawns.shells) enemies.push(makeShell(d));
+  for (const d of L.spawns.flyers) enemies.push(makeFlyer(d));
   for (const d of L.spawns.casters) enemies.push(makeCaster(d));
-  if (!bossDead) { bossRef = makeBoss(L.spawns.boss); enemies.push(bossRef); } else bossRef = null;
-  bossAggro = false;
+  for (const d of L.spawns.bosses) if (!deadBosses.has(d.id)) enemies.push(makeBoss(d));
 }
 function initWorld() {
+  seals = L.spawns.seals.map(s => ({ ...s, opened: false }));
   barriers = L.spawns.barriers.map(b => ({ ...b, breakSeq: F.breakSeqOf(b.seq), ana: F.analyze(b.seq), broken: false, rot: Math.random() * 6 }));
   checkpoints = L.spawns.checkpoints.map(c => ({ x: c.x * TILE, y: c.floor * TILE, lit: false }));
   signs = L.spawns.signs.map(s => ({ x: s.x * TILE + 16, y: s.floor * TILE, text: s.text }));
@@ -334,7 +360,11 @@ function attemptBreak() {
     else {
       t.e.channel = null; t.e.state = 'stun'; t.e.stunT = 2.5; t.e.hp -= 10; t.e.flash = 0.2;
       pushMsg('破陣成功！');
-      if (t.ana.backlash) { applyPlayerDamage(16, true); pushMsg('反噬陣發動——受到 16 點反噬！', 2.2); burst(cx(player), cy(player), '#ff3355', 20, 180, 0.7); }
+    }
+    if (t.ana.backlash) { // 反噬：不論敵陣或結界，破陣者皆受反傷
+      applyPlayerDamage(16, true);
+      pushMsg('反噬陣發動——受到 16 點反噬！', 2.2);
+      burst(cx(player), cy(player), '#ff3355', 20, 180, 0.7);
     }
   } else {
     snd.breakFail();
@@ -361,8 +391,9 @@ function applyPlayerDamage(dmg, pierce) {
   if (player.channel) { player.channel = null; pushMsg('施展被打斷！', 1.5); }
   if (player.hp <= 0) { player.hp = 0; player.dead = true; state = 'dead'; snd.die(); burst(cx(player), cy(player), '#8899ff', 40, 240, 1); }
 }
-function damageEnemy(e, dmg, burn) {
+function damageEnemy(e, dmg, burn, type) {
   if (e.dead) return;
+  if (e.armor && (type === 'proj' || type === 'melee')) dmg *= 0.4; // 盾岩獸：法彈/法杖減傷
   e.hp -= dmg; e.flash = 0.15;
   if (burn) e.burn = { dps: burn.dps, t: burn.dur };
   if (e.hp <= 0) {
@@ -370,8 +401,9 @@ function damageEnemy(e, dmg, burn) {
     snd.die(); burst(cx(e), cy(e), '#ffb27a', 24, 200, 0.8);
     pickups.push({ id: null, type: 'manaOrb', x: cx(e), y: cy(e), vy: -150, bob: 0 });
     if (e.kind === 'boss') {
-      bossDead = true; bossRef = null;
-      pushMsg('深陣咒主已滅——門扉開啟！', 3.5); shake(8, 0.6);
+      deadBosses.add(e.id);
+      pushMsg(e.id === 'b3' ? '祖陣墟主已滅——歸環之門開啟！' : e.name + '已滅——封印崩解！', 3.5);
+      shake(8, 0.6);
       burst(cx(e), cy(e), '#c080ff', 60, 300, 1.4);
     }
   }
@@ -383,9 +415,22 @@ function startEnemyChannel(e, seq) {
   e.state = 'channel';
 }
 function bossChooseSeq(e) {
-  if (e.hp < e.maxHp * 0.55 && e.healCd <= 0) { e.healCd = 18; return ['water', 'fire', 'wind']; } // 爆療自癒
-  const opts = [['fire', 'wind', 'earth'], ['fire', 'earth']];
-  if (e.hp < e.maxHp * 0.85) opts.push(['fire', 'wind', 'water', 'wind', 'earth']); // 反噬大陣
+  if (e.id === 'b1') {
+    if (e.hp < e.maxHp * 0.55 && e.healCd <= 0) { e.healCd = 18; return ['water', 'fire', 'wind']; } // 爆療自癒
+    const opts = [['fire', 'wind', 'earth'], ['fire', 'earth']];
+    if (e.hp < e.maxHp * 0.85) opts.push(['fire', 'wind', 'water', 'wind', 'earth']); // 反噬大陣
+    const s = opts[e.castIdx % opts.length]; e.castIdx++;
+    return s;
+  }
+  if (e.id === 'b2') { // 疾風梟主：衝鋒／風靈彈／落雷陣
+    const opts = [['wind', 'earth', 'fire'], ['wind', 'water'], ['earth', 'water', 'wind']];
+    const s = opts[e.castIdx % opts.length]; e.castIdx++;
+    return s;
+  }
+  // b3 祖陣墟主
+  if (e.hp < e.maxHp * 0.55 && e.healCd <= 0) { e.healCd = 20; return ['water', 'fire', 'wind', 'water', 'wind', 'earth']; } // 反噬自癒（六元素）
+  const opts = [['fire', 'wind', 'earth'], ['wind', 'earth', 'fire']];
+  if (e.hp < e.maxHp * 0.8) opts.push(['fire', 'earth', 'water', 'wind', 'earth', 'water']); // 六元素大爆裂
   const s = opts[e.castIdx % opts.length]; e.castIdx++;
   return s;
 }
@@ -406,11 +451,44 @@ function enemyCast(e, ch) {
     zones.push({ x: px - 60, y: gy - 42, w: 120, h: 42, kind: 'fire', owner: 'enemy', dps: 12, t: 0, dur: 4.5 });
     snd.cast();
   } else if (key === 'water,fire') {
-    e.hp = clamp(e.hp + 50, 0, e.maxHp); burst(ex, cy(e), '#7fd0ff', 24, 140, 0.7); snd.heal();
-    pushMsg('咒主自癒了 50 點！', 2);
+    if (e.healer) { // 水咒師：治療最傷的同伴
+      let ally = null, worst = 0.999;
+      for (const o of enemies) {
+        if (o === e || o.dead) continue;
+        if (dist2(cx(o), cy(o), ex, cy(e)) > 340 * 340) continue;
+        const r2 = o.hp / o.maxHp;
+        if (r2 < worst) { worst = r2; ally = o; }
+      }
+      const tgt = ally || e;
+      tgt.hp = clamp(tgt.hp + 35, 0, tgt.maxHp);
+      burst(cx(tgt), cy(tgt), '#7fd0ff', 20, 130, 0.6);
+    } else {
+      const amt = e.healAmt || 40;
+      e.hp = clamp(e.hp + amt, 0, e.maxHp); burst(ex, cy(e), '#7fd0ff', 24, 140, 0.7);
+      if (e.kind === 'boss') pushMsg(e.name + '自癒了 ' + amt + ' 點！', 2);
+    }
+    snd.heal();
   } else if (key === 'fire,water') {
-    blasts.push({ x: px, y: py, r: 100, dmg: 30, delay: 0.85, t: 0, owner: 'enemy' });
+    const big = e.id === 'b3';
+    blasts.push({ x: px, y: py, r: big ? 130 : 100, dmg: big ? 38 : 30, delay: big ? 1.0 : 0.85, t: 0, owner: 'enemy' });
     snd.cast();
+  } else if (key === 'wind,fire') { // 衝鋒陣：朝玩家高速衝撞
+    const dx2 = px - ex, dy2 = py - ey, len = Math.hypot(dx2, dy2) || 1;
+    const sp2 = e.fly ? 560 : 500;
+    e.eDashT = 0.5; e.eDashVx = dx2 / len * sp2; e.eDashVy = e.fly ? dy2 / len * sp2 : 0;
+    snd.dash();
+  } else if (key === 'wind,water') { // 風靈彈：三發緩速追蹤
+    for (let i = -1; i <= 1; i++) {
+      const a = Math.atan2(py - ey, px - ex) + i * 0.5;
+      projectiles.push({ x: ex, y: ey, vx: Math.cos(a) * 185, vy: Math.sin(a) * 185, r: 6, dmg: 10, owner: 'enemy', homing: true, life: 5, col: '#7fe8d0' });
+    }
+    snd.cast();
+  } else if (key === 'earth,wind') { // 落雷陣：玩家腳下佈設三枚延遲地雷
+    for (let i = -1; i <= 1; i++) {
+      const gx = px + i * 70, gy = groundYBelow(gx, py);
+      blasts.push({ x: gx, y: gy - 20, r: 62, dmg: 16, delay: 1.5, t: 0, owner: 'enemy' });
+    }
+    snd.trap();
   } else {
     const a = Math.atan2(py - ey, px - ex);
     projectiles.push({ x: ex, y: ey, vx: Math.cos(a) * 300, vy: Math.sin(a) * 300, r: 6, dmg: 12, owner: 'enemy', homing: false, life: 3.5, col: '#ff6238' });
@@ -425,7 +503,7 @@ function updateEnemy(e, dt) {
     if (Math.random() < dt * 8) particles.push({ x: e.x + Math.random() * e.w, y: e.y + Math.random() * e.h, vx: 0, vy: -60, life: 0.4, maxLife: 0.4, col: '#ff6238', size: 2.5, grav: 0 });
     if (e.hp <= 0) { damageEnemy(e, 0); return; } }
 
-  if (e.kind === 'walker') {
+  if (e.kind === 'walker' || e.kind === 'shell') {
     e.vx = e.dir * e.speed;
     moveEntity(e, dt);
     // 撞牆或前方懸空就折返
@@ -435,19 +513,67 @@ function updateEnemy(e, dt) {
     return;
   }
 
-  // caster / boss
-  moveEntity(e, dt);
+  if (e.kind === 'flyer') { // 晶蝠：無重力盤旋，追擊玩家
+    e.t += dt;
+    const aggro = !player.dead && dist2(cx(player), cy(player), cx(e), cy(e)) < 420 * 420;
+    const tx2 = (aggro ? cx(player) : e.homeX);
+    const ty2 = (aggro ? cy(player) - 14 : e.homeY) + Math.sin(e.t * 3) * 26;
+    e.vx += clamp(tx2 - cx(e), -1, 1) * 380 * dt;
+    e.vy += clamp(ty2 - cy(e), -1, 1) * 360 * dt;
+    e.vx = clamp(e.vx, -165, 165); e.vy = clamp(e.vy, -150, 150);
+    const nx = e.x + e.vx * dt, ny = e.y + e.vy * dt;
+    if (!rectSolid(nx, e.y, e.w, e.h)) e.x = nx; else e.vx *= -0.6;
+    if (!rectSolid(e.x, ny, e.w, e.h)) e.y = ny; else e.vy *= -0.6;
+    return;
+  }
+
+  // ---- caster / boss ----
+  if (e.eDashT > 0) { // 衝鋒陣進行中
+    e.eDashT -= dt;
+    e.vx = e.eDashVx; e.vy = e.eDashVy || 0;
+    moveEntity(e, dt, !!e.fly);
+    if (e.hitWall) e.eDashT = 0;
+    if (Math.random() < 0.7) particles.push({ x: cx(e), y: cy(e), vx: 0, vy: 0, life: 0.3, maxLife: 0.3, col: '#c2ffd9', size: 5, grav: 0 });
+    return;
+  }
+  const flyingNow = e.fly && e.stunT <= 0; // 被破陣暈眩時墜地
+  if (!flyingNow) moveEntity(e, dt);
   if (e.stunT > 0) { e.stunT -= dt; if (e.stunT <= 0) e.state = 'idle'; return; }
   if (e.cool > 0) e.cool -= dt;
-  if (e.kind === 'boss' && e.healCd > 0) e.healCd -= dt;
+  if (e.healCd > 0) e.healCd -= dt;
+  if (e.minionCd > 0) e.minionCd -= dt;
 
   const inRange = Math.abs(cx(player) - cx(e)) < 460 && Math.abs(cy(player) - cy(e)) < 220 && !player.dead;
   if (e.kind === 'boss') {
-    if (!bossAggro && !player.dead && player.x > 187 * TILE) { bossAggro = true; bossIntroT = 3.2; pushMsg('深陣咒主現身！', 2.5); }
-    if (bossAggro && !e.channel && e.state !== 'stun') {
+    if (!e.aggro && !player.dead && player.x > e.aggroX && Math.abs(cx(player) - cx(e)) < 560) {
+      e.aggro = true; bossIntroT = 3.2; bossIntroData = { name: e.name, sub: e.sub, img: e.img };
+      pushMsg(e.name + '現身！', 2.5);
+    }
+    if (flyingNow) { // 疾風梟主：懸浮追蹤
+      const ty3 = clamp(player.y - 130, 12 * TILE, 25 * TILE) + Math.sin(e.animT * 1.6) * 30;
+      const txT = e.aggro ? cx(player) : e.aggroX + 14 * TILE;
+      e.vx += clamp(txT - cx(e), -1, 1) * 240 * dt; e.vx = clamp(e.vx, -115, 115);
+      e.vy += clamp(ty3 - e.y, -1, 1) * 240 * dt; e.vy = clamp(e.vy, -105, 105);
+      const nx = e.x + e.vx * dt, ny = e.y + e.vy * dt;
+      if (!rectSolid(nx, e.y, e.w, e.h)) e.x = nx; else e.vx = 0;
+      if (!rectSolid(e.x, ny, e.w, e.h)) e.y = ny; else e.vy = 0;
+    } else if (e.aggro && !e.channel && !e.fly) {
       const d = cx(player) - cx(e);
       if (Math.abs(d) > 70) e.vx = Math.sign(d) * 35; else e.vx = 0;
-    } else e.vx = 0;
+    } else if (!e.fly) e.vx = 0;
+    // 祖陣墟主：低血召喚晶蝠
+    if (e.id === 'b3' && e.aggro && e.hp < e.maxHp * 0.5 && e.minionCd <= 0) {
+      e.minionCd = 22;
+      const alive = enemies.filter(o => o.minion && !o.dead).length;
+      if (alive < 2) {
+        for (let k = -1; k <= 1; k += 2) {
+          const f = makeFlyer({ x: e.x / TILE + k * 3, y: 20 });
+          f.minion = true; enemies.push(f);
+        }
+        burst(cx(e), e.y, '#c080ff', 24, 200, 0.8);
+        pushMsg('墟主召喚了晶蝠！', 2);
+      }
+    }
   }
 
   if (e.channel) {
@@ -462,12 +588,25 @@ function updateEnemy(e, dt) {
       }
     } else {
       ch.t += dt;
-      if (ch.t >= ch.total) { enemyCast(e, ch); e.channel = null; e.state = 'idle'; e.cool = e.kind === 'boss' ? 1.6 : 2.2; }
+      if (ch.t >= ch.total) { enemyCast(e, ch); e.channel = null; e.state = 'idle'; e.cool = e.kind === 'boss' ? e.coolBase : 2.2; }
     }
-  } else if ((e.kind === 'boss' ? bossAggro : inRange) && e.cool <= 0 && e.state !== 'stun') {
-    const seq = e.kind === 'boss' ? bossChooseSeq(e) : e.pool[Math.floor(Math.random() * e.pool.length)];
+  } else if ((e.kind === 'boss' ? e.aggro : inRange) && e.cool <= 0 && e.state !== 'stun') {
+    const seq = e.kind === 'boss' ? bossChooseSeq(e) : casterChooseSeq(e);
     startEnemyChannel(e, seq);
   }
+}
+// 一般咒師選陣：水咒師只在附近有受傷同伴時起補陣
+function casterChooseSeq(e) {
+  if (e.healer) {
+    let wounded = false;
+    for (const o of enemies) {
+      if (o === e || o.dead || o.hp >= o.maxHp - 1) continue;
+      if (dist2(cx(o), cy(o), cx(e), cy(e)) < 340 * 340) { wounded = true; break; }
+    }
+    if (wounded) return e.pool[0]; // 水火風 補陣
+    return e.pool[e.pool.length - 1];
+  }
+  return e.pool[Math.floor(Math.random() * e.pool.length)];
 }
 
 // ---------------- 玩家更新 ----------------
@@ -490,7 +629,7 @@ function updatePlayer(dt) {
     moveEntity(player, dt, true);
     if (Math.random() < 0.8) particles.push({ x: cx(player), y: cy(player), vx: 0, vy: 0, life: 0.3, maxLife: 0.3, col: player.dashDmg > 0 ? '#ff8850' : '#4fe0a0', size: 6, grav: 0 });
     if (player.dashDmg > 0) {
-      for (const e of enemies) if (!e.dead && !player.dashHit.has(e) && overlap(player, e)) { player.dashHit.add(e); damageEnemy(e, player.dashDmg); burst(cx(e), cy(e), '#ff8850', 10, 140, 0.5); }
+      for (const e of enemies) if (!e.dead && !player.dashHit.has(e) && overlap(player, e)) { player.dashHit.add(e); damageEnemy(e, player.dashDmg, null, 'dash'); burst(cx(e), cy(e), '#ff8850', 10, 140, 0.5); }
     }
   } else {
     const target = (right ? 1 : 0) - (left ? 1 : 0);
@@ -518,7 +657,7 @@ function updatePlayer(dt) {
   // 近戰判定
   if (player.attackT > 0) {
     const hb = { x: player.facing > 0 ? player.x + player.w : player.x - 44, y: player.y - 2, w: 44, h: player.h + 4 };
-    for (const e of enemies) if (!e.dead && !player.attackHit.has(e) && overlap(hb, e)) { player.attackHit.add(e); damageEnemy(e, 9); burst(cx(e), cy(e), '#cfd6ff', 8, 120, 0.4); }
+    for (const e of enemies) if (!e.dead && !player.attackHit.has(e) && overlap(hb, e)) { player.attackHit.add(e); damageEnemy(e, 9, null, 'melee'); burst(cx(e), cy(e), '#cfd6ff', 8, 120, 0.4); }
   }
 
   // 敵人接觸傷害
@@ -541,6 +680,7 @@ function updatePlayer(dt) {
       p.taken = true;
       if (p.type === 'slot') { player.slots++; player.breakSlots++; snd.pickup(); pushMsg('陣槽玉！施放／破陣槽 +1（現在 ' + player.slots + ' 格）', 3); if (p.id) collected.add(p.id); }
       else if (p.type === 'mana') { player.maxMp += 30; player.mp = player.maxMp; snd.pickup(); pushMsg('靈力玉！靈力上限 +30', 3); if (p.id) collected.add(p.id); }
+      else if (p.type === 'life') { player.maxHp += 25; player.hp = player.maxHp; snd.pickup(); pushMsg('命玉！生命上限 +25', 3); if (p.id) collected.add(p.id); }
       else { player.mp = clamp(player.mp + 25, 0, player.maxMp); beep(700, 0.1, 'sine', 0.08, 150); }
       burst(p.x, p.y, '#9fe8ff', 14, 130, 0.6);
     }
@@ -561,7 +701,7 @@ function updatePlayer(dt) {
 
   // 終點
   if (goal && Math.abs(cx(player) - (goal.x + 16)) < 34 && Math.abs(player.y + player.h - goal.y) < 60) {
-    if (bossDead) { state = 'victory'; snd.breakOk(); }
+    if (deadBosses.has('b3')) { state = 'victory'; snd.breakOk(); }
     else if (globalT - goalMsgT > 3) { goalMsgT = globalT; pushMsg('邪陣未破，門扉緊閉……', 2.2); }
   }
 }
@@ -592,7 +732,7 @@ function updateWorld(dt) {
     if (rectSolid(pr.x - pr.r, pr.y - pr.r, pr.r * 2, pr.r * 2)) { pr.life = 0; burst(pr.x, pr.y, pr.col, 10, 120, 0.4); }
     if (pr.owner === 'player') {
       for (const e of enemies) if (!e.dead && pr.life > 0 && pr.x > e.x - pr.r && pr.x < e.x + e.w + pr.r && pr.y > e.y - pr.r && pr.y < e.y + e.h + pr.r) {
-        damageEnemy(e, pr.dmg, pr.burn); pr.life = 0; burst(pr.x, pr.y, pr.col, 12, 150, 0.5);
+        damageEnemy(e, pr.dmg, pr.burn, 'proj'); pr.life = 0; burst(pr.x, pr.y, pr.col, 12, 150, 0.5);
       }
     } else if (!player.dead && pr.life > 0 && pr.x > player.x - pr.r && pr.x < player.x + player.w + pr.r && pr.y > player.y - pr.r && pr.y < player.y + player.h + pr.r) {
       applyPlayerDamage(pr.dmg); pr.life = 0; burst(pr.x, pr.y, pr.col, 12, 150, 0.5);
@@ -605,7 +745,7 @@ function updateWorld(dt) {
     z.t += dt;
     if (Math.random() < dt * 20) particles.push({ x: z.x + Math.random() * z.w, y: z.y + z.h, vx: 0, vy: -70, life: 0.5, maxLife: 0.5, col: z.kind === 'fire' ? '#ff6238' : '#3fa8ff', size: 2.5, grav: 0 });
     if (z.kind === 'fire') {
-      if (z.owner === 'player') { for (const e of enemies) if (!e.dead && overlap(z, e)) damageEnemy(e, z.dps * dt); }
+      if (z.owner === 'player') { for (const e of enemies) if (!e.dead && overlap(z, e)) damageEnemy(e, z.dps * dt, null, 'zone'); }
       else if (!player.dead && overlap(z, player) && player.iframes <= 0) { player.hp -= z.dps * dt; if (player.hp <= 0) applyPlayerDamage(1, true); }
     } else if (!player.dead && overlap(z, player)) player.hp = clamp(player.hp + z.dps * dt, 0, player.maxHp);
   }
@@ -625,7 +765,7 @@ function updateWorld(dt) {
         fired = true; snd.boom(); shake(4, 0.2);
         const R = t.mod === 'wind' ? 130 : 85;
         const dmg = (t.mod === 'fire' ? 30 : t.mod === 'wind' ? 18 : 20) * t.power;
-        for (const e of enemies) if (!e.dead && dist2(t.x, t.y - 10, cx(e), cy(e)) < R * R) damageEnemy(e, dmg, t.mod === 'fire' ? { dps: 5, dur: 2 } : null);
+        for (const e of enemies) if (!e.dead && dist2(t.x, t.y - 10, cx(e), cy(e)) < R * R) damageEnemy(e, dmg, t.mod === 'fire' ? { dps: 5, dur: 2 } : null, 'trap');
         burst(t.x, t.y - 10, t.mod === 'wind' ? '#4fe0a0' : '#ff6238', 26, 220, 0.7);
       }
     }
@@ -654,6 +794,15 @@ function updateWorld(dt) {
   messages = messages.filter(m => m.t > 0);
 
   for (const b of barriers) if (!b.broken) b.rot += dt * 0.6;
+  // 封印崩解演出
+  for (const s of seals) {
+    if (!s.opened && deadBosses.has(s.boss)) {
+      s.opened = true;
+      burst(s.x * TILE + 16, ((s.y0 + s.y1) / 2) * TILE, '#ffe08a', 34, 240, 1);
+      shake(5, 0.3);
+      pushMsg('封印崩解，去路已開！', 2.5);
+    }
+  }
   if (shakeT > 0) { shakeT -= dt; if (shakeT <= 0) shakeMag = 0; }
 }
 
@@ -752,6 +901,11 @@ function drawBackground() {
     let ox = -((cam.x * 0.35) % dw); if (ox > 0) ox -= dw;
     for (let x = ox; x < VW; x += dw) ctx.drawImage(im, x, VH - dh, dw, dh);
     ctx.fillStyle = 'rgba(9,8,18,0.5)'; ctx.fillRect(0, 0, VW, VH); // 壓暗讓前景突出
+    // 區域色調：幽泉水道偏青、祖陣迴廊偏緋
+    const teal = clamp((cam.x - 210 * TILE) / 900, 0, 1) * (1 - clamp((cam.x - 348 * TILE) / 900, 0, 1));
+    const crimson = clamp((cam.x - 352 * TILE) / 900, 0, 1);
+    if (teal > 0.01) { ctx.fillStyle = 'rgba(30,120,110,' + (teal * 0.13).toFixed(3) + ')'; ctx.fillRect(0, 0, VW, VH); }
+    if (crimson > 0.01) { ctx.fillStyle = 'rgba(150,30,50,' + (crimson * 0.13).toFixed(3) + ')'; ctx.fillRect(0, 0, VW, VH); }
   } else {
     // 遠景鐘乳石與石丘（兩層視差，程式化 fallback）
     for (let layer = 0; layer < 2; layer++) {
@@ -884,19 +1038,20 @@ function drawSignsPickupsGoal() {
       ctx.fillStyle = '#57c8ff';
       ctx.beginPath(); ctx.arc(sx, sy, 5, 0, Math.PI * 2); ctx.fill();
     } else {
-      const col = p.type === 'slot' ? '#9fe8ff' : '#5f8dff';
+      const col = p.type === 'slot' ? '#9fe8ff' : p.type === 'life' ? '#ff8fa8' : '#5f8dff';
       ctx.save(); ctx.translate(sx, sy); ctx.rotate(globalT * 1.5);
       ctx.fillStyle = col;
       ctx.fillRect(-8, -8, 16, 16);
       ctx.restore();
-      ctx.fillStyle = 'rgba(159,232,255,0.25)';
+      ctx.fillStyle = p.type === 'life' ? 'rgba(255,143,168,0.25)' : 'rgba(159,232,255,0.25)';
       ctx.beginPath(); ctx.arc(sx, sy, 16 + Math.sin(globalT * 4) * 3, 0, Math.PI * 2); ctx.fill();
     }
   }
   if (goal) {
     const sx = goal.x + 16 - cam.x, sy = goal.y - cam.y;
+    const open = deadBosses.has('b3');
     ctx.save();
-    ctx.globalAlpha = bossDead ? 0.9 : 0.25;
+    ctx.globalAlpha = open ? 0.9 : 0.25;
     for (let i = 0; i < 3; i++) {
       ctx.strokeStyle = i === 1 ? '#c080ff' : '#8f5fff';
       ctx.lineWidth = 3;
@@ -905,10 +1060,30 @@ function drawSignsPickupsGoal() {
       ctx.stroke();
     }
     ctx.restore();
-    if (bossDead) {
+    if (open) {
       ctx.fillStyle = 'rgba(192,128,255,0.3)';
       ctx.beginPath(); ctx.ellipse(sx, sy - 40, 16, 30, 0, 0, Math.PI * 2); ctx.fill();
     }
+  }
+}
+function drawSeals() {
+  for (const s of seals) {
+    if (deadBosses.has(s.boss)) continue;
+    const sx = s.x * TILE - cam.x;
+    const syT = s.y0 * TILE - cam.y, syB = (s.y1 + 1) * TILE - cam.y;
+    if (sx < -40 || sx > VW + 40) continue;
+    ctx.save();
+    ctx.fillStyle = '#1a1626';
+    ctx.fillRect(sx, syT, TILE, syB - syT);
+    ctx.globalAlpha = 0.5 + 0.25 * Math.sin(globalT * 2.5 + s.x);
+    ctx.strokeStyle = '#c080ff'; ctx.lineWidth = 2;
+    ctx.strokeRect(sx + 4, syT + 4, TILE - 8, syB - syT - 8);
+    ctx.fillStyle = '#c080ff';
+    ctx.font = 'bold 20px "Microsoft JhengHei", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('封', sx + 16, (syT + syB) / 2);
+    ctx.textBaseline = 'alphabetic';
+    ctx.restore();
   }
 }
 function drawEnemy(e) {
@@ -916,34 +1091,81 @@ function drawEnemy(e) {
   const sx = e.x - cam.x, sy = e.y - cam.y;
   ctx.save();
   if (e.flash > 0) { ctx.globalAlpha = 0.9; ctx.filter = 'brightness(2)'; }
-  if (e.kind === 'walker') {
-    ctx.fillStyle = '#5a4a44';
-    ctx.beginPath(); ctx.ellipse(sx + 12, sy + 15, 13, 11, 0, 0, Math.PI * 2); ctx.fill();
+  if (e.kind === 'walker' || e.kind === 'shell') {
+    const shell = e.kind === 'shell';
+    ctx.fillStyle = shell ? '#4a4640' : '#5a4a44';
+    ctx.beginPath(); ctx.ellipse(sx + e.w / 2, sy + e.h - 11, e.w / 2 + 1, 11, 0, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#463a35';
     const step = Math.sin(e.animT * 10) * 3;
-    ctx.fillRect(sx + 3, sy + 20 + step, 5, 6); ctx.fillRect(sx + 16, sy + 20 - step, 5, 6);
+    ctx.fillRect(sx + 3, sy + e.h - 6 + step, 5, 6); ctx.fillRect(sx + e.w - 8, sy + e.h - 6 - step, 5, 6);
+    if (shell) { // 盾岩獸：石甲殼與稜刺
+      ctx.fillStyle = '#7d8697';
+      ctx.beginPath(); ctx.arc(sx + e.w / 2, sy + e.h - 12, e.w / 2, Math.PI, 0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#9aa4b8';
+      for (let k = 0; k < 3; k++) {
+        const kx = sx + 6 + k * 9;
+        ctx.beginPath(); ctx.moveTo(kx, sy + e.h - 14); ctx.lineTo(kx + 4, sy + e.h - 24 - k % 2 * 3); ctx.lineTo(kx + 8, sy + e.h - 14); ctx.closePath(); ctx.fill();
+      }
+    }
     ctx.fillStyle = '#ff5544';
-    ctx.fillRect(sx + (e.dir > 0 ? 16 : 4), sy + 10, 4, 3);
+    ctx.fillRect(sx + (e.dir > 0 ? e.w - 8 : 4), sy + e.h - 16, 4, 3);
+  } else if (e.kind === 'flyer') {
+    // 晶蝠：撲翼水晶蝙蝠
+    const flap = Math.sin(e.animT * 14) * 8;
+    ctx.fillStyle = '#3d4a66';
+    ctx.beginPath(); ctx.moveTo(sx + 11, sy + 8); ctx.lineTo(sx - 8, sy + 2 + flap); ctx.lineTo(sx + 4, sy + 11); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(sx + 11, sy + 8); ctx.lineTo(sx + 30, sy + 2 + flap); ctx.lineTo(sx + 18, sy + 11); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#57668c';
+    ctx.beginPath(); ctx.ellipse(sx + 11, sy + 8, 7, 6, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#9fe8ff';
+    ctx.fillRect(sx + 8, sy + 6, 2, 2); ctx.fillRect(sx + 12, sy + 6, 2, 2);
   } else {
+    // 咒師／頭目（袍裝法師形）
     const boss = e.kind === 'boss';
     const bob = Math.sin(e.animT * 2.5) * 2;
-    // 袍
-    ctx.fillStyle = boss ? '#3d2a55' : '#33415e';
-    ctx.beginPath();
-    ctx.moveTo(sx + e.w / 2, sy + bob);
-    ctx.lineTo(sx + e.w, sy + e.h);
-    ctx.lineTo(sx, sy + e.h);
-    ctx.closePath(); ctx.fill();
-    // 兜帽
-    ctx.fillStyle = boss ? '#553a75' : '#42546e';
-    ctx.beginPath(); ctx.arc(sx + e.w / 2, sy + 9 + bob, boss ? 12 : 9, 0, Math.PI * 2); ctx.fill();
-    // 目光
-    ctx.fillStyle = boss ? '#e070ff' : '#ffcc66';
-    ctx.fillRect(sx + e.w / 2 - 5, sy + 8 + bob, 3, 3); ctx.fillRect(sx + e.w / 2 + 2, sy + 8 + bob, 3, 3);
-    if (boss) { // 角冠
-      ctx.strokeStyle = '#c080ff'; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.moveTo(sx + 8, sy + 4 + bob); ctx.lineTo(sx + 2, sy - 10 + bob); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(sx + e.w - 8, sy + 4 + bob); ctx.lineTo(sx + e.w - 2, sy - 10 + bob); ctx.stroke();
+    let robe = '#33415e', hood = '#42546e', eye = '#ffcc66', horn = null;
+    if (e.healer) { robe = '#2e5e8e'; hood = '#3d76a8'; eye = '#7fd0ff'; }
+    else if (e.elite) { robe = '#5e2038'; hood = '#7a2c4c'; eye = '#ff6a88'; }
+    if (boss) {
+      if (e.id === 'b1') { robe = '#3d2a55'; hood = '#553a75'; eye = '#e070ff'; horn = '#c080ff'; }
+      else if (e.id === 'b3') { robe = '#4a1520'; hood = '#6e2030'; eye = '#ff5060'; horn = '#ff8080'; }
+    }
+    if (boss && e.id === 'b2') {
+      // 疾風梟主：巨梟
+      const flap = Math.sin(e.animT * 6) * 14;
+      ctx.fillStyle = '#4a6b63';
+      ctx.beginPath(); ctx.moveTo(sx + 10, sy + 16); ctx.lineTo(sx - 22, sy + 4 + flap); ctx.lineTo(sx + 6, sy + 26); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(sx + e.w - 10, sy + 16); ctx.lineTo(sx + e.w + 22, sy + 4 + flap); ctx.lineTo(sx + e.w - 6, sy + 26); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#5f8a7d';
+      ctx.beginPath(); ctx.ellipse(sx + e.w / 2, sy + e.h / 2 + 4, e.w / 2 - 2, e.h / 2 - 2, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#7fb3a3';
+      ctx.beginPath(); ctx.arc(sx + e.w / 2, sy + 10, 12, 0, Math.PI * 2); ctx.fill();
+      // 耳羽與目光
+      ctx.strokeStyle = '#c2ffd9'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(sx + e.w / 2 - 8, sy + 2); ctx.lineTo(sx + e.w / 2 - 13, sy - 8); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(sx + e.w / 2 + 8, sy + 2); ctx.lineTo(sx + e.w / 2 + 13, sy - 8); ctx.stroke();
+      ctx.fillStyle = '#c2ffd9';
+      ctx.beginPath(); ctx.arc(sx + e.w / 2 - 5, sy + 9, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(sx + e.w / 2 + 5, sy + 9, 3, 0, Math.PI * 2); ctx.fill();
+    } else {
+      // 袍
+      ctx.fillStyle = robe;
+      ctx.beginPath();
+      ctx.moveTo(sx + e.w / 2, sy + bob);
+      ctx.lineTo(sx + e.w, sy + e.h);
+      ctx.lineTo(sx, sy + e.h);
+      ctx.closePath(); ctx.fill();
+      // 兜帽
+      ctx.fillStyle = hood;
+      ctx.beginPath(); ctx.arc(sx + e.w / 2, sy + 9 + bob, boss ? 12 : 9, 0, Math.PI * 2); ctx.fill();
+      // 目光
+      ctx.fillStyle = eye;
+      ctx.fillRect(sx + e.w / 2 - 5, sy + 8 + bob, 3, 3); ctx.fillRect(sx + e.w / 2 + 2, sy + 8 + bob, 3, 3);
+      if (horn) { // 角冠
+        ctx.strokeStyle = horn; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(sx + 8, sy + 4 + bob); ctx.lineTo(sx + 2, sy - 10 + bob); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(sx + e.w - 8, sy + 4 + bob); ctx.lineTo(sx + e.w - 2, sy - 10 + bob); ctx.stroke();
+      }
     }
     if (e.state === 'stun') {
       ctx.fillStyle = '#ffe08a';
@@ -1105,10 +1327,16 @@ function drawHud() {
     if (i < player.breakSeq.length) drawGlyph(player.breakSeq[i], x, y, 12);
     else { ctx.strokeStyle = player.breakMode ? 'rgba(255,157,176,0.85)' : 'rgba(174,184,232,0.4)'; ctx.lineWidth = player.breakMode ? 2 : 1; ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.stroke(); ctx.lineWidth = 1; }
   }
-  // 頭目血條
-  if (bossAggro && bossRef && !bossRef.dead) {
-    drawBar(VW / 2 - 180, 20, 360, 13, bossRef.hp / bossRef.maxHp, '#a050e0', '深陣咒主');
-    if (Assets.has('bossPortrait')) drawPortraitBadge(Assets.img.bossPortrait, VW / 2 - 180 - 18, 26, 15, '#c080ff');
+  // 頭目血條（顯示目前交戰中的頭目）
+  let activeBoss = null, abD = Infinity;
+  for (const e of enemies) {
+    if (e.kind !== 'boss' || !e.aggro || e.dead) continue;
+    const d = Math.abs(cx(e) - cx(player));
+    if (d < abD) { abD = d; activeBoss = e; }
+  }
+  if (activeBoss) {
+    drawBar(VW / 2 - 180, 20, 360, 13, activeBoss.hp / activeBoss.maxHp, '#a050e0', activeBoss.name);
+    if (activeBoss.img && Assets.has(activeBoss.img)) drawPortraitBadge(Assets.img[activeBoss.img], VW / 2 - 198, 26, 15, '#c080ff');
   }
   // 訊息
   ctx.textAlign = 'center';
@@ -1183,6 +1411,7 @@ function drawOverlay() {
   });
 }
 function drawBossIntro() {
+  if (!bossIntroData) return;
   const appear = clamp((3.2 - bossIntroT) * 3, 0, 1); // 進場
   const fade = clamp(bossIntroT * 1.5, 0, 1);         // 收場淡出
   const alpha = Math.min(appear, fade);
@@ -1190,8 +1419,8 @@ function drawBossIntro() {
   ctx.save();
   ctx.globalAlpha = alpha;
   const pw = 160, ph = 216, px = VW - pw - 46 + slide, py = VH / 2 - ph / 2 - 10;
-  if (Assets.has('bossPortrait')) {
-    const im = Assets.img.bossPortrait;
+  if (bossIntroData.img && Assets.has(bossIntroData.img)) {
+    const im = Assets.img[bossIntroData.img];
     ctx.save();
     ctx.beginPath(); ctx.rect(px, py, pw, ph); ctx.closePath(); ctx.clip();
     const s = Math.max(pw / im.width, ph / im.height);
@@ -1201,9 +1430,9 @@ function drawBossIntro() {
   }
   ctx.textAlign = 'right';
   ctx.fillStyle = '#e6ccff'; ctx.font = '15px "Microsoft JhengHei", sans-serif';
-  ctx.fillText('—— 深層陣殿之主 ——', px - 16, VH / 2 - 14);
+  ctx.fillText('—— ' + bossIntroData.sub + ' ——', px - 16, VH / 2 - 14);
   ctx.fillStyle = '#c080ff'; ctx.font = 'bold 34px "Microsoft JhengHei", sans-serif';
-  ctx.fillText('深 陣 咒 主', px - 16, VH / 2 + 22);
+  ctx.fillText(bossIntroData.name.split('').join(' '), px - 16, VH / 2 + 22);
   ctx.restore();
 }
 function drawScreens() {
@@ -1268,6 +1497,7 @@ function render() {
   drawTiles();
   drawZonesTraps();
   drawBarriers();
+  drawSeals();
   drawSignsPickupsGoal();
   for (const e of enemies) drawEnemy(e);
   drawPlayer();
@@ -1306,7 +1536,7 @@ function frame(now) {
     playTime += dt;
     updatePlayer(dt);
     for (const e of enemies) updateEnemy(e, dt);
-    enemies = enemies.filter(e => !e.dead || e === bossRef);
+    enemies = enemies.filter(e => !e.dead);
     updateWorld(dt);
   }
   // 攝影機
@@ -1333,7 +1563,7 @@ window.RingWalker = {
     enemies: () => enemies,
     barriers: () => barriers,
     messages: () => messages,
-    get bossDead() { return bossDead; },
+    deadBosses: () => Array.from(deadBosses),
   },
 };
 })();

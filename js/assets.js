@@ -8,6 +8,8 @@ const Assets = (() => {
     bgCave: 'assets/bg_cave.png',
     titleScene: 'assets/title_scene.png',
     bossPortrait: 'assets/boss_portrait.png',
+    boss2Portrait: 'assets/boss2_portrait.png',
+    boss3Portrait: 'assets/boss3_portrait.png',
     playerPortrait: 'assets/player_portrait.png',
   };
   const img = {};
