@@ -176,6 +176,7 @@ const player = {
   slots: 3, breakSlots: 3,
   seq: [], breakSeq: [], channel: null, breakMode: false,
   iframes: 0, coyote: 0, jumpBuf: 0,
+  hasWings: false, hasClaw: false, airJumps: 0, wallLock: 0,
   dashT: 0, dashDir: 1, dashDmg: 0, dashHit: null, ghostT: 0,
   healAura: 0, healRate: 5, anchor: null,
   attackT: 0, attackCd: 0, attackHit: null,
@@ -796,12 +797,32 @@ function updatePlayer(dt) {
     }
   } else {
     const target = (right ? 1 : 0) - (left ? 1 : 0);
-    if (target !== 0) player.facing = target;
-    player.vx += (target * MOVE_MAX * chanSlow - player.vx) * Math.min(1, dt * 12);
-    if (player.grounded) player.coyote = 0.09;
-    if (player.jumpBuf > 0 && (player.grounded || player.coyote > 0)) {
-      player.vy = JUMP_V; player.jumpBuf = 0; player.coyote = 0;
-      beep(240, 0.08, 'sine', 0.05, 120);
+    if (target !== 0 && player.wallLock <= 0) player.facing = target;
+    if (player.wallLock > 0) player.wallLock -= dt;
+    else player.vx += (target * MOVE_MAX * chanSlow - player.vx) * Math.min(1, dt * 12);
+    if (player.grounded) { player.coyote = 0.09; player.airJumps = player.hasWings ? 1 : 0; }
+    // 蹬牆滑落（岩爪）：空中朝牆推、貼牆且下墜時
+    const wallDir = player.hasClaw && !player.grounded && target !== 0 && player.vy > 0 &&
+      rectSolid(player.x + target * 3, player.y + 4, player.w, player.h - 10) ? target : 0;
+    if (wallDir !== 0) {
+      player.vy = Math.min(player.vy, 75);
+      player.airJumps = player.hasWings ? 1 : 0; // 貼牆重置二段跳
+      if (Math.random() < dt * 14) particles.push({ x: player.x + (wallDir > 0 ? player.w : 0), y: player.y + Math.random() * player.h, vx: -wallDir * 40, vy: 30, life: 0.35, maxLife: 0.35, col: '#a8b0c8', size: 2, grav: 0 });
+    }
+    if (player.jumpBuf > 0) {
+      if (player.grounded || player.coyote > 0) { // 地面跳
+        player.vy = JUMP_V; player.jumpBuf = 0; player.coyote = 0;
+        beep(240, 0.08, 'sine', 0.05, 120);
+      } else if (wallDir !== 0) { // 蹬牆跳
+        player.vy = JUMP_V * 0.95; player.vx = -wallDir * 320; player.facing = -wallDir;
+        player.wallLock = 0.16; player.jumpBuf = 0;
+        beep(300, 0.09, 'triangle', 0.07, 160);
+        burst(player.x + (wallDir > 0 ? player.w : 0), cy(player), '#a8b0c8', 8, 90, 0.35);
+      } else if (player.airJumps > 0) { // 二段跳（風翼，全高度）
+        player.airJumps--; player.vy = JUMP_V; player.jumpBuf = 0;
+        snd.dash();
+        for (let k = 0; k < 10; k++) particles.push({ x: cx(player) + (Math.random() - 0.5) * 24, y: player.y + player.h, vx: (Math.random() - 0.5) * 80, vy: 60 + Math.random() * 60, life: 0.4, maxLife: 0.4, col: '#9dffc8', size: 3, grav: 0 });
+      }
     }
     if (player.vy < 0 && !(keys.KeyX || keys.ArrowUp)) player.vy += GRAV * 0.9 * dt; // 短按小跳
     moveEntity(player, dt);
@@ -844,6 +865,8 @@ function updatePlayer(dt) {
       if (p.type === 'slot') { player.slots++; player.breakSlots++; snd.pickup(); pushMsg('陣槽玉！施放／破陣槽 +1（現在 ' + player.slots + ' 格）', 3); if (p.id) collected.add(p.id); }
       else if (p.type === 'mana') { player.maxMp += 30; player.mp = player.maxMp; snd.pickup(); pushMsg('靈力玉！靈力上限 +30', 3); if (p.id) collected.add(p.id); }
       else if (p.type === 'life') { player.maxHp += 25; player.hp = player.maxHp; snd.pickup(); pushMsg('命玉！生命上限 +25', 3); if (p.id) collected.add(p.id); }
+      else if (p.type === 'wings') { player.hasWings = true; player.airJumps = 1; snd.breakOk(); pushMsg('風翼玉！習得【二段跳】——空中可再跳一次', 4); if (p.id) collected.add(p.id); }
+      else if (p.type === 'claw') { player.hasClaw = true; snd.breakOk(); pushMsg('岩爪玉！習得【蹬牆跳】——朝牆推貼壁滑落，跳躍蹬牆而上', 4); if (p.id) collected.add(p.id); }
       else { player.mp = clamp(player.mp + 25, 0, player.maxMp); beep(700, 0.1, 'sine', 0.08, 150); }
       burst(p.x, p.y, '#9fe8ff', 14, 130, 0.6);
     }
@@ -1234,6 +1257,24 @@ function drawSignsPickupsGoal() {
     if (p.type === 'manaOrb') {
       ctx.fillStyle = '#57c8ff';
       ctx.beginPath(); ctx.arc(sx, sy, 5, 0, Math.PI * 2); ctx.fill();
+    } else if (p.type === 'wings' || p.type === 'claw') {
+      // 能力玉：光柱＋符文，比一般寶物醒目
+      const col = p.type === 'wings' ? '#9dffc8' : '#d8c8a8';
+      ctx.save();
+      ctx.globalAlpha = 0.25 + 0.1 * Math.sin(globalT * 3);
+      const lg = ctx.createLinearGradient(sx, sy - 90, sx, sy + 14);
+      lg.addColorStop(0, 'rgba(0,0,0,0)'); lg.addColorStop(1, col);
+      ctx.fillStyle = lg; ctx.fillRect(sx - 10, sy - 90, 20, 104);
+      ctx.restore();
+      ctx.save(); ctx.translate(sx, sy); ctx.rotate(globalT * 1.2);
+      ctx.fillStyle = col; ctx.fillRect(-9, -9, 18, 18);
+      ctx.restore();
+      ctx.fillStyle = '#141220';
+      ctx.font = 'bold 13px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(p.type === 'wings' ? '翼' : '爪', sx, sy + 1);
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = p.type === 'wings' ? 'rgba(157,255,200,0.3)' : 'rgba(216,200,168,0.3)';
+      ctx.beginPath(); ctx.arc(sx, sy, 18 + Math.sin(globalT * 4) * 4, 0, Math.PI * 2); ctx.fill();
     } else {
       const col = p.type === 'slot' ? '#9fe8ff' : p.type === 'life' ? '#ff8fa8' : '#5f8dff';
       ctx.save(); ctx.translate(sx, sy); ctx.rotate(globalT * 1.5);
@@ -1535,6 +1576,20 @@ function drawHud() {
     drawBar(16, 14, 190, 14, player.hp / player.maxHp, '#e0445c', '生命 ' + Math.ceil(player.hp));
     drawBar(16, 32, 190, 11, player.mp / player.maxMp, '#4a7dde', '靈力 ' + Math.floor(player.mp));
   }
+  // 能力徽章（風翼／岩爪）
+  let bx = 58;
+  const badge = (ch, col) => {
+    ctx.fillStyle = 'rgba(10,12,24,0.7)';
+    ctx.beginPath(); ctx.arc(bx, 56, 9, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = col;
+    ctx.font = 'bold 10px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(ch, bx, 57);
+    ctx.textBaseline = 'alphabetic';
+    bx += 22;
+  };
+  if (player.hasWings) badge('翼', '#9dffc8');
+  if (player.hasClaw) badge('爪', '#d8c8a8');
   ctx.fillStyle = 'rgba(230,236,255,0.75)';
   ctx.font = '12px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'right';
   ctx.fillText('Tab 陣式表　M 地圖　P 暫停　N 靜音', VW - 14, 22);
