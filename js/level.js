@@ -102,6 +102,7 @@ const Level = (() => {
       { x: 17, floor: 32, text: '按 A火 S水 D土 F風 輸入元素，Space 起陣。同元素不能相鄰；被克元素不能接續（水克火・土克水・風克土・火克風）。序列首尾必須接成圓。' },
       { x: 26, floor: 32, text: '速成陣式——「A D」火土＝火種（燃燒地帶）；「F S」風水＝流體位移。按 Tab 查看全部陣式。' },
       { x: 44, floor: 32, text: '速陣快而弱，強陣強而慢。施展窗口越長，越容易被人破陣。' },
+      { x: 143, floor: 32, text: '擊殺妖物可得靈砂。前方遊商以靈砂易物；「刻紋」須於點燃的祭壇（按 Q）裝備。' },
       { x: 76, floor: 32, text: '結界擋路！破陣＝把對方每個元素換成克制它的元素。此陣為 土→火；風克土、水克火，故破陣序列為「風 水」。站到結界前，按 Shift 進入破陣模式，輸入 F、S，再按 Space 發動。' },
       { x: 98, floor: 32, text: '裂谷太寬，跳不過去。風系陣法可以位移——「F S」風水＝流體位移，或「F D A」風土火＝衝刺（土是間接元素，只作橋接）。空中也能起陣。' },
       { x: 122, floor: 32, text: '古老的刻痕：「谷底之東，岩隙藏寶。」' },
@@ -163,7 +164,13 @@ const Level = (() => {
       { x: 222, floor: 32, type: 'wings' },  // 風翼玉（二段跳）：幽泉水道入口
       { x: 365, floor: 32, type: 'claw' },   // 岩爪玉（蹬牆跳）：休息室
       { x: 370, floor: 6,  type: 'life' },   // 命玉四：蹬牆井頂部密室
+      { x: 131, floor: 36, type: 'charm', charm: 'swift' },   // 迅陣之絡：裂谷暗道
+      { x: 223, floor: 19, type: 'charm', charm: 'hunter' },  // 追獵之目：水道上層迴廊
+      { x: 315, floor: 32, type: 'charm', charm: 'siphon' },  // 蝕魂之鎖：走廊C（精英看守）
+      { x: 372, floor: 6,  type: 'charm', charm: 'breaker' }, // 破軍之爪：蹬牆井密室
+      { x: 326, floor: 32, type: 'charm', charm: 'feather' }, // 輕靈羽：梟主巢穴
     ],
+    npc: { x: 146, floor: 32 },  // 遊商（祭壇室）
     checkpoints: [
       { x: 136, floor: 32 },
       { x: 190, floor: 32 },

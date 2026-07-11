@@ -170,6 +170,26 @@ const deadBosses = new Set();   // 已擊殺頭目（跨重生保留）
 let bossIntroData = null;       // 頭目登場卡 {name, sub, img}
 const collected = new Set();
 
+// ---------------- 刻紋（流派配件）與遊商 ----------------
+const CHARM_DEFS = {
+  ember:   { name: '烈焰之核', cost: 2, desc: '火系陣法傷害 +35%' },
+  spring:  { name: '泉心佩',   cost: 1, desc: '水系治療效果 +40%' },
+  swift:   { name: '迅陣之絡', cost: 2, desc: '施展窗口縮短 30%' },
+  hunter:  { name: '追獵之目', cost: 1, desc: '法杖傷害 9→14、揮擊更快，命中回復 4 靈力' },
+  wall:    { name: '鐵壁符',   cost: 2, desc: '受到的傷害 -25%' },
+  breaker: { name: '破軍之爪', cost: 2, desc: '破陣傷害 10→35，暈眩延長至 3.5 秒' },
+  siphon:  { name: '蝕魂之鎖', cost: 1, desc: '擊殺敵人回復 8 生命' },
+  feather: { name: '輕靈羽',   cost: 1, desc: '位移陣距離 +40%、移動速度 +10%' },
+};
+const SHOP_STOCK = [
+  { charm: 'ember',  price: 40 },
+  { charm: 'spring', price: 30 },
+  { charm: 'wall',   price: 60 },
+  { notch: true, price: 80, name: '刻紋擴環', desc: '刻紋容量 +1（上限 4）' },
+];
+const SHARD_DROP = { walker: 4, flyer: 3, shell: 8, caster: 7, thorn: 5, bomber: 3, boss: 40 };
+let charmOpen = false, shopOpen = false, menuSel = 0;
+
 const player = {
   x: 0, y: 0, w: 18, h: 40, vx: 0, vy: 0, facing: 1, grounded: false,
   hp: 100, maxHp: 100, mp: 100, maxMp: 100,
@@ -177,6 +197,7 @@ const player = {
   seq: [], breakSeq: [], channel: null, breakMode: false,
   iframes: 0, coyote: 0, jumpBuf: 0,
   hasWings: false, hasClaw: false, airJumps: 0, wallLock: 0,
+  shards: 0, charmsOwned: new Set(), equipped: new Set(), notchMax: 3,
   dashT: 0, dashDir: 1, dashDmg: 0, dashHit: null, ghostT: 0,
   healAura: 0, healRate: 5, anchor: null,
   attackT: 0, attackCd: 0, attackHit: null,
@@ -184,6 +205,34 @@ const player = {
 };
 
 function pushMsg(text, dur) { messages.push({ text, t: dur || 2.6 }); if (messages.length > 4) messages.shift(); }
+const CH = (id) => player.equipped.has(id); // 是否裝備某刻紋
+const notchUsed = () => { let n = 0; for (const id of player.equipped) n += CHARM_DEFS[id].cost; return n; };
+function nearShrine() {
+  for (const c of checkpoints) if (c.lit && Math.abs(cx(player) - (c.x + 16)) < 70 && Math.abs(player.y + player.h - c.y) < 60) return true;
+  return false;
+}
+function nearShop() {
+  const n = L.spawns.npc;
+  return Math.abs(cx(player) - (n.x * TILE + 16)) < 70 && Math.abs(player.y + player.h - n.floor * TILE) < 60;
+}
+function toggleEquip(id) {
+  if (player.equipped.has(id)) { player.equipped.delete(id); beep(300, 0.08, 'triangle', 0.08); return; }
+  if (notchUsed() + CHARM_DEFS[id].cost > player.notchMax) { snd.bad(); pushMsg('刻紋槽不足', 1.5); return; }
+  player.equipped.add(id); beep(520, 0.1, 'triangle', 0.1);
+}
+function buyItem(item) {
+  if (item.notch) {
+    if (player.notchMax >= 4) { pushMsg('刻紋容量已達上限', 1.5); return; }
+    if (player.shards < item.price) { snd.bad(); pushMsg('靈砂不足', 1.5); return; }
+    player.shards -= item.price; player.notchMax++; snd.pickup();
+    pushMsg('刻紋容量 +1（現在 ' + player.notchMax + ' 格）', 2.5);
+    return;
+  }
+  if (player.charmsOwned.has(item.charm)) { pushMsg('已擁有此刻紋', 1.5); return; }
+  if (player.shards < item.price) { snd.bad(); pushMsg('靈砂不足', 1.5); return; }
+  player.shards -= item.price; player.charmsOwned.add(item.charm); snd.pickup();
+  pushMsg('購得刻紋【' + CHARM_DEFS[item.charm].name + '】——於祭壇按 Q 裝備', 3);
+}
 function shake(mag, t) { shakeMag = Math.max(shakeMag, mag); shakeT = Math.max(shakeT, t); }
 function burst(x, y, col, n, spd, life) {
   for (let i = 0; i < n; i++) {
@@ -345,6 +394,22 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyN') { muted = !muted; Music.setMuted(muted); pushMsg(muted ? '靜音' : '音效開啟', 1.2); return; }
   if (paused || mapOpen) return;
 
+  // 刻紋／商店選單
+  if (charmOpen || shopOpen) {
+    const list = charmOpen ? Array.from(player.charmsOwned) : SHOP_STOCK;
+    if (e.code === 'ArrowUp') menuSel = Math.max(0, menuSel - 1);
+    else if (e.code === 'ArrowDown') menuSel = Math.min(Math.max(0, list.length - 1), menuSel + 1);
+    else if (e.code === 'Space' && list.length > 0) { if (charmOpen) toggleEquip(list[menuSel]); else buyItem(list[menuSel]); }
+    else if (e.code === 'KeyQ' || e.code === 'Escape') { charmOpen = false; shopOpen = false; }
+    return;
+  }
+  if (e.code === 'KeyQ') {
+    if (nearShop()) { shopOpen = true; menuSel = 0; }
+    else if (nearShrine()) { charmOpen = true; menuSel = 0; }
+    else pushMsg('需站在遊商或點燃的祭壇旁', 1.5);
+    return;
+  }
+
   // Shift：切換破陣模式（按一次進入，確認後或再按一次退出）
   if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') { toggleBreakMode(); return; }
 
@@ -377,7 +442,8 @@ function sealFormation() {
   player.mp -= cost;
   const seq = player.seq.slice();
   player.seq = [];
-  player.channel = { seq, ana: F.analyze(seq), total: F.castTime(seq.length), t: 0, rot: 0 };
+  const total = F.castTime(seq.length) * (CH('swift') ? 0.7 : 1); // 迅陣之絡
+  player.channel = { seq, ana: F.analyze(seq), total, t: 0, rot: 0 };
   snd.seal();
 }
 
@@ -393,7 +459,9 @@ function fireProjectile(opts) {
 function castEffect(ana) {
   const eff = ana.effective;
   const main = eff[0], mod = eff[1] || null;
-  const power = 1 + 0.4 * Math.max(0, eff.length - 2);
+  let power = 1 + 0.4 * Math.max(0, eff.length - 2);
+  if (main === 'fire' && CH('ember')) power *= 1.35;    // 烈焰之核
+  if (main === 'water' && CH('spring')) power *= 1.4;   // 泉心佩
   const px = cx(player), py = cy(player);
 
   if (main === 'fire') {
@@ -433,7 +501,8 @@ function castEffect(ana) {
         player.anchor = null; pushMsg('錨點傳送', 1.2);
       }
     } else {
-      player.dashT = 0.24; player.dashDir = player.facing; player.dashHit = new Set();
+      player.dashT = CH('feather') ? 0.34 : 0.24; // 輕靈羽：位移距離 +40%
+      player.dashDir = player.facing; player.dashHit = new Set();
       player.dashDmg = mod === 'fire' ? 16 * power : 0;
       if (mod === 'water') { player.iframes = Math.max(player.iframes, 0.75); player.ghostT = 0.75; pushMsg('流體位移', 1.2); }
       else if (mod === 'fire') pushMsg('衝刺', 1.2);
@@ -481,7 +550,10 @@ function attemptBreak() {
     shake(5, 0.25);
     if (t.kind === 'barrier') { t.b.broken = true; pushMsg('結界破除！'); }
     else {
-      t.e.channel = null; t.e.state = 'stun'; t.e.stunT = 2.5; t.e.hp -= 10; t.e.flash = 0.2;
+      t.e.channel = null; t.e.state = 'stun'; t.e.flash = 0.2;
+      t.e.stunT = CH('breaker') ? 3.5 : 2.5;       // 破軍之爪：延長暈眩
+      t.e.hp -= CH('breaker') ? 35 : 10;           // 破軍之爪：破陣重擊
+      if (t.e.hp <= 0) damageEnemy(t.e, 0, null, 'break');
       pushMsg('破陣成功！');
     }
     if (t.ana.backlash) { // 反噬：不論敵陣或結界，破陣者皆受反傷
@@ -500,7 +572,8 @@ function attemptBreak() {
 // ---------------- 近身攻擊 ----------------
 function doMelee() {
   if (player.attackCd > 0) return;
-  player.attackCd = 0.35; player.attackT = 0.18; player.attackHit = new Set();
+  player.attackCd = CH('hunter') ? 0.25 : 0.35; // 追獵之目：更快
+  player.attackT = 0.18; player.attackHit = new Set();
   beep(500, 0.07, 'triangle', 0.08, 200);
 }
 
@@ -508,6 +581,7 @@ function doMelee() {
 function applyPlayerDamage(dmg, pierce) {
   if (player.dead) return;
   if (!pierce && player.iframes > 0) return;
+  if (CH('wall')) dmg = Math.round(dmg * 0.75); // 鐵壁符
   player.hp -= dmg;
   if (!pierce) player.iframes = 1;
   snd.hurt(); shake(4, 0.2);
@@ -523,6 +597,8 @@ function damageEnemy(e, dmg, burn, type) {
     e.dead = true;
     snd.die(); burst(cx(e), cy(e), '#ffb27a', 24, 200, 0.8);
     pickups.push({ id: null, type: 'manaOrb', x: cx(e), y: cy(e), vy: -150, bob: 0 });
+    player.shards += SHARD_DROP[e.kind] || 4; // 靈砂
+    if (CH('siphon')) player.hp = clamp(player.hp + 8, 0, player.maxHp); // 蝕魂之鎖
     if (e.kind === 'boss') {
       deadBosses.add(e.id);
       pushMsg(e.id === 'b3' ? '祖陣墟主已滅——歸環之門開啟！' : e.name + '已滅——封印崩解！', 3.5);
@@ -799,7 +875,7 @@ function updatePlayer(dt) {
     const target = (right ? 1 : 0) - (left ? 1 : 0);
     if (target !== 0 && player.wallLock <= 0) player.facing = target;
     if (player.wallLock > 0) player.wallLock -= dt;
-    else player.vx += (target * MOVE_MAX * chanSlow - player.vx) * Math.min(1, dt * 12);
+    else player.vx += (target * MOVE_MAX * (CH('feather') ? 1.1 : 1) * chanSlow - player.vx) * Math.min(1, dt * 12);
     if (player.grounded) { player.coyote = 0.09; player.airJumps = player.hasWings ? 1 : 0; }
     // 蹬牆滑落（岩爪）：空中朝牆推、貼牆且下墜時
     const wallDir = player.hasClaw && !player.grounded && target !== 0 && player.vy > 0 &&
@@ -841,7 +917,12 @@ function updatePlayer(dt) {
   // 近戰判定
   if (player.attackT > 0) {
     const hb = { x: player.facing > 0 ? player.x + player.w : player.x - 44, y: player.y - 2, w: 44, h: player.h + 4 };
-    for (const e of enemies) if (!e.dead && !player.attackHit.has(e) && overlap(hb, e)) { player.attackHit.add(e); damageEnemy(e, 9, null, 'melee'); burst(cx(e), cy(e), '#cfd6ff', 8, 120, 0.4); }
+    for (const e of enemies) if (!e.dead && !player.attackHit.has(e) && overlap(hb, e)) {
+      player.attackHit.add(e);
+      damageEnemy(e, CH('hunter') ? 14 : 9, null, 'melee'); // 追獵之目：法杖強化
+      if (CH('hunter')) player.mp = clamp(player.mp + 4, 0, player.maxMp);
+      burst(cx(e), cy(e), '#cfd6ff', 8, 120, 0.4);
+    }
   }
 
   // 敵人接觸傷害（爆晶蟲 touchDmg=0，靠自爆，不觸發接觸無敵）
@@ -867,6 +948,7 @@ function updatePlayer(dt) {
       else if (p.type === 'life') { player.maxHp += 25; player.hp = player.maxHp; snd.pickup(); pushMsg('命玉！生命上限 +25', 3); if (p.id) collected.add(p.id); }
       else if (p.type === 'wings') { player.hasWings = true; player.airJumps = 1; snd.breakOk(); pushMsg('風翼玉！習得【二段跳】——空中可再跳一次', 4); if (p.id) collected.add(p.id); }
       else if (p.type === 'claw') { player.hasClaw = true; snd.breakOk(); pushMsg('岩爪玉！習得【蹬牆跳】——朝牆推貼壁滑落，跳躍蹬牆而上', 4); if (p.id) collected.add(p.id); }
+      else if (p.type === 'charm') { player.charmsOwned.add(p.charm); snd.breakOk(); pushMsg('獲得刻紋【' + CHARM_DEFS[p.charm].name + '】——於祭壇按 Q 裝備', 4); if (p.id) collected.add(p.id); }
       else { player.mp = clamp(player.mp + 25, 0, player.maxMp); beep(700, 0.1, 'sine', 0.08, 150); }
       burst(p.x, p.y, '#9fe8ff', 14, 130, 0.6);
     }
@@ -932,7 +1014,7 @@ function updateWorld(dt) {
     if (Math.random() < dt * 20) particles.push({ x: z.x + Math.random() * z.w, y: z.y + z.h, vx: 0, vy: -70, life: 0.5, maxLife: 0.5, col: z.kind === 'fire' ? '#ff6238' : '#3fa8ff', size: 2.5, grav: 0 });
     if (z.kind === 'fire') {
       if (z.owner === 'player') { for (const e of enemies) if (!e.dead && overlap(z, e)) damageEnemy(e, z.dps * dt, null, 'zone'); }
-      else if (!player.dead && overlap(z, player) && player.iframes <= 0) { player.hp -= z.dps * dt; if (player.hp <= 0) applyPlayerDamage(1, true); }
+      else if (!player.dead && overlap(z, player) && player.iframes <= 0) { player.hp -= z.dps * dt * (CH('wall') ? 0.75 : 1); if (player.hp <= 0) applyPlayerDamage(1, true); }
     } else if (!player.dead && overlap(z, player)) player.hp = clamp(player.hp + z.dps * dt, 0, player.maxHp);
   }
   zones = zones.filter(z => z.t < z.dur);
@@ -1250,6 +1332,33 @@ function drawSignsPickupsGoal() {
       ctx.beginPath(); ctx.arc(sx, sy - 56, fl, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = 'rgba(255,224,138,0.25)';
       ctx.beginPath(); ctx.arc(sx, sy - 56, fl * 2.4, 0, Math.PI * 2); ctx.fill();
+      if (Math.abs(cx(player) - (c.x + 16)) < 70 && Math.abs(player.y + player.h - c.y) < 60) {
+        ctx.fillStyle = '#ffe9b0'; ctx.font = '12px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText('「Q」刻紋', sx, sy - 78);
+      }
+    }
+  }
+  { // 遊商
+    const n = L.spawns.npc;
+    const sx = n.x * TILE + 16 - cam.x, sy = n.floor * TILE - cam.y;
+    if (sx > -60 && sx < VW + 60) {
+      const bob = Math.sin(globalT * 2) * 1.5;
+      ctx.fillStyle = '#6a5638'; // 蓑袍
+      ctx.beginPath(); ctx.moveTo(sx, sy - 40 + bob); ctx.lineTo(sx + 14, sy); ctx.lineTo(sx - 14, sy); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#8a7048';
+      ctx.beginPath(); ctx.arc(sx, sy - 38 + bob, 8, 0, Math.PI * 2); ctx.fill(); // 斗笠頭
+      ctx.fillStyle = '#3a2c14';
+      ctx.fillRect(sx - 12, sy - 38 + bob, 24, 3);
+      // 燈籠
+      ctx.strokeStyle = '#5a4a30'; ctx.beginPath(); ctx.moveTo(sx + 12, sy - 30 + bob); ctx.lineTo(sx + 20, sy - 24 + bob); ctx.stroke();
+      ctx.fillStyle = '#ffca66';
+      ctx.globalAlpha = 0.8 + 0.2 * Math.sin(globalT * 5);
+      ctx.beginPath(); ctx.arc(sx + 21, sy - 20 + bob, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+      if (Math.abs(cx(player) - (n.x * TILE + 16)) < 70 && Math.abs(player.y + player.h - n.floor * TILE) < 60) {
+        ctx.fillStyle = '#ffe9b0'; ctx.font = '12px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText('「Q」交易', sx, sy - 58);
+      }
     }
   }
   for (const p of pickups) {
@@ -1257,6 +1366,18 @@ function drawSignsPickupsGoal() {
     if (p.type === 'manaOrb') {
       ctx.fillStyle = '#57c8ff';
       ctx.beginPath(); ctx.arc(sx, sy, 5, 0, Math.PI * 2); ctx.fill();
+    } else if (p.type === 'charm') {
+      // 刻紋石板
+      const bobY = sy + Math.sin(globalT * 2.5 + p.bob) * 2;
+      ctx.fillStyle = '#e8b458';
+      ctx.fillRect(sx - 7, bobY - 9, 14, 18);
+      ctx.strokeStyle = '#8a6a30'; ctx.lineWidth = 1.5; ctx.strokeRect(sx - 7, bobY - 9, 14, 18);
+      ctx.fillStyle = '#3a2c14';
+      ctx.font = 'bold 11px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('紋', sx, bobY);
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = 'rgba(232,180,88,0.25)';
+      ctx.beginPath(); ctx.arc(sx, bobY, 15 + Math.sin(globalT * 4) * 3, 0, Math.PI * 2); ctx.fill();
     } else if (p.type === 'wings' || p.type === 'claw') {
       // 能力玉：光柱＋符文，比一般寶物醒目
       const col = p.type === 'wings' ? '#9dffc8' : '#d8c8a8';
@@ -1590,6 +1711,12 @@ function drawHud() {
   };
   if (player.hasWings) badge('翼', '#9dffc8');
   if (player.hasClaw) badge('爪', '#d8c8a8');
+  // 靈砂
+  ctx.save(); ctx.translate(20, 76); ctx.rotate(Math.PI / 4);
+  ctx.fillStyle = '#e8d8a0'; ctx.fillRect(-4, -4, 8, 8); ctx.restore();
+  ctx.fillStyle = '#e8d8a0';
+  ctx.font = 'bold 13px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText(String(Math.floor(player.shards)), 32, 81);
   ctx.fillStyle = 'rgba(230,236,255,0.75)';
   ctx.font = '12px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'right';
   ctx.fillText('Tab 陣式表　M 地圖　P 暫停　N 靜音', VW - 14, 22);
@@ -1855,6 +1982,69 @@ function drawMap() {
     ctx.fillStyle = '#c8d8f0'; ctx.fillText(lg[1], lx + 12, VH - 56);
   });
 }
+function drawTradeMenu() {
+  const W2 = 520, H2 = 380, X2 = VW / 2 - W2 / 2, Y2 = VH / 2 - H2 / 2;
+  ctx.fillStyle = 'rgba(8,7,18,0.95)'; ctx.fillRect(X2, Y2, W2, H2);
+  ctx.strokeStyle = '#e8b458'; ctx.lineWidth = 2; ctx.strokeRect(X2 + 3.5, Y2 + 3.5, W2 - 7, H2 - 7);
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 18px "Microsoft JhengHei", sans-serif';
+  ctx.fillStyle = '#e8b458';
+  ctx.fillText(shopOpen ? '❖ 遊商' : '❖ 刻紋', X2 + 24, Y2 + 34);
+  // 靈砂與刻紋槽
+  ctx.font = '13px "Microsoft JhengHei", sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#e8d8a0';
+  let head = '靈砂 ' + Math.floor(player.shards);
+  if (charmOpen) {
+    head = '刻紋槽 ';
+    ctx.fillText(head, X2 + W2 - 100, Y2 + 32);
+    for (let i = 0; i < player.notchMax; i++) {
+      ctx.beginPath(); ctx.arc(X2 + W2 - 90 + i * 16, Y2 + 28, 5, 0, Math.PI * 2);
+      if (i < notchUsed()) { ctx.fillStyle = '#e8b458'; ctx.fill(); }
+      else { ctx.strokeStyle = '#8a7048'; ctx.lineWidth = 1.5; ctx.stroke(); }
+    }
+  } else ctx.fillText(head, X2 + W2 - 24, Y2 + 32);
+
+  const list = charmOpen ? Array.from(player.charmsOwned) : SHOP_STOCK;
+  ctx.textAlign = 'left';
+  if (list.length === 0) {
+    ctx.fillStyle = '#8a93bf';
+    ctx.fillText('尚未取得任何刻紋——探索世界或向遊商購買。', X2 + 24, Y2 + 80);
+  }
+  let selDesc = '';
+  list.forEach((item, i) => {
+    const y = Y2 + 70 + i * 42;
+    const isCharm = charmOpen;
+    const id = isCharm ? item : item.charm;
+    const def = id ? CHARM_DEFS[id] : null;
+    const name = def ? def.name : item.name;
+    if (i === menuSel) {
+      ctx.fillStyle = 'rgba(232,180,88,0.12)'; ctx.fillRect(X2 + 14, y - 20, W2 - 28, 36);
+      ctx.fillStyle = '#e8b458'; ctx.fillText('▶', X2 + 22, y);
+      selDesc = def ? def.desc : item.desc;
+    }
+    ctx.fillStyle = i === menuSel ? '#ffe9b0' : '#c8d8f0';
+    ctx.font = '15px "Microsoft JhengHei", sans-serif';
+    ctx.fillText(name, X2 + 44, y);
+    ctx.font = '13px "Microsoft JhengHei", sans-serif';
+    if (isCharm) {
+      ctx.fillStyle = '#8a7048';
+      ctx.fillText('●'.repeat(def.cost), X2 + 200, y);
+      if (player.equipped.has(id)) { ctx.fillStyle = '#8fe0c0'; ctx.fillText('◆ 裝備中', X2 + 260, y); }
+    } else {
+      const owned = item.charm && player.charmsOwned.has(item.charm);
+      const soldOut = item.notch && player.notchMax >= 4;
+      ctx.fillStyle = owned || soldOut ? '#5a6b8c' : '#e8d8a0';
+      ctx.fillText(owned ? '已擁有' : soldOut ? '售罄' : '◈ ' + item.price, X2 + 300, y);
+    }
+  });
+  // 說明與操作提示
+  ctx.fillStyle = '#aeb8e8';
+  ctx.font = '13px "Microsoft JhengHei", sans-serif';
+  if (selDesc) ctx.fillText(selDesc, X2 + 24, Y2 + H2 - 52);
+  ctx.fillStyle = '#8a93bf';
+  ctx.fillText(shopOpen ? '↑↓ 選擇　Space 購買　Q 離開' : '↑↓ 選擇　Space 裝備／卸下　Q 離開', X2 + 24, Y2 + H2 - 24);
+}
 function drawScreens() {
   if (state === 'title') {
     if (Assets.has('titleScene')) { drawCover(Assets.img.titleScene); ctx.fillStyle = 'rgba(8,7,18,0.6)'; ctx.fillRect(0, 0, VW, VH); }
@@ -1942,6 +2132,7 @@ function render() {
   if (state === 'play' && bossIntroT > 0) drawBossIntro();
   if (overlayOpen && state === 'play') drawOverlay();
   if (mapOpen && state === 'play') drawMap();
+  if ((charmOpen || shopOpen) && state === 'play') drawTradeMenu();
   drawScreens();
 }
 
@@ -1969,7 +2160,7 @@ function frame(now) {
     if (keys.ArrowDown) mapPanY += ps;
     mapPanX = clamp(mapPanX, 0, L.W); mapPanY = clamp(mapPanY, 0, L.H);
   }
-  if (state === 'play' && !paused && !overlayOpen && !mapOpen) {
+  if (state === 'play' && !paused && !overlayOpen && !mapOpen && !charmOpen && !shopOpen) {
     playTime += dt;
     markExplored();
     updatePlayer(dt);
