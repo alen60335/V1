@@ -180,8 +180,14 @@ const CHARM_DEFS = {
   breaker: { name: '破軍之爪', cost: 2, desc: '破陣傷害 10→35，暈眩延長至 3.5 秒' },
   siphon:  { name: '蝕魂之鎖', cost: 1, desc: '擊殺敵人回復 8 生命' },
   feather: { name: '輕靈羽',   cost: 1, desc: '位移陣距離 +40%、移動速度 +10%' },
+  // 道紋：流派核心，同時僅能裝備一枚，不佔刻紋槽（代價內建於取捨）
+  way_swift:    { name: '迅雷道紋', cost: 0, way: true, desc: '【速陣流】三元素以下：窗口 -45%、威力 +25%｜四元素以上：窗口 +30%、威力 -20%' },
+  way_backlash: { name: '噬心道紋', cost: 0, way: true, desc: '【反噬流】兩個間接元素即成反噬（不限同種）；反噬陣起陣時釋放衝擊波，但自傷 8｜一般陣威力 -15%' },
+  way_breaker:  { name: '斷陣道紋', cost: 0, way: true, desc: '【破陣流】敵方佈陣與施展窗口大幅變慢；破陣後目標 6 秒內受傷 +30%｜自身陣法威力 -25%' },
+  way_grand:    { name: '宏淵道紋', cost: 0, way: true, desc: '【大陣流】施放槽 +2（上限 8）；四元素以上威力 +30%｜二元素陣威力 -30%、窗口 +25%' },
 };
 const SHOP_STOCK = [
+  { charm: 'way_swift', price: 60 },
   { charm: 'ember',  price: 40 },
   { charm: 'spring', price: 30 },
   { charm: 'wall',   price: 60 },
@@ -207,6 +213,12 @@ const player = {
 function pushMsg(text, dur) { messages.push({ text, t: dur || 2.6 }); if (messages.length > 4) messages.shift(); }
 const CH = (id) => player.equipped.has(id); // 是否裝備某刻紋
 const notchUsed = () => { let n = 0; for (const id of player.equipped) n += CHARM_DEFS[id].cost; return n; };
+const effSlots = () => Math.min(8, player.slots + (CH('way_grand') ? 2 : 0)); // 宏淵：施放槽+2
+function charmMenuList() { // 道紋排最前（選單與按鍵共用，確保索引一致）
+  const arr = Array.from(player.charmsOwned);
+  arr.sort((a, b) => (CHARM_DEFS[b].way ? 1 : 0) - (CHARM_DEFS[a].way ? 1 : 0));
+  return arr;
+}
 function nearShrine() {
   for (const c of checkpoints) if (c.lit && Math.abs(cx(player) - (c.x + 16)) < 70 && Math.abs(player.y + player.h - c.y) < 60) return true;
   return false;
@@ -216,8 +228,16 @@ function nearShop() {
   return Math.abs(cx(player) - (n.x * TILE + 16)) < 70 && Math.abs(player.y + player.h - n.floor * TILE) < 60;
 }
 function toggleEquip(id) {
+  const def = CHARM_DEFS[id];
   if (player.equipped.has(id)) { player.equipped.delete(id); beep(300, 0.08, 'triangle', 0.08); return; }
-  if (notchUsed() + CHARM_DEFS[id].cost > player.notchMax) { snd.bad(); pushMsg('刻紋槽不足', 1.5); return; }
+  if (def.way) { // 道紋互斥：裝新的自動卸下舊的
+    for (const k of Array.from(player.equipped)) if (CHARM_DEFS[k].way) player.equipped.delete(k);
+    player.equipped.add(id);
+    beep(620, 0.12, 'triangle', 0.12);
+    pushMsg('道紋【' + def.name + '】生效', 2);
+    return;
+  }
+  if (notchUsed() + def.cost > player.notchMax) { snd.bad(); pushMsg('刻紋槽不足', 1.5); return; }
   player.equipped.add(id); beep(520, 0.1, 'triangle', 0.1);
 }
 function buyItem(item) {
@@ -396,7 +416,7 @@ window.addEventListener('keydown', (e) => {
 
   // 刻紋／商店選單
   if (charmOpen || shopOpen) {
-    const list = charmOpen ? Array.from(player.charmsOwned) : SHOP_STOCK;
+    const list = charmOpen ? charmMenuList() : SHOP_STOCK;
     if (e.code === 'ArrowUp') menuSel = Math.max(0, menuSel - 1);
     else if (e.code === 'ArrowDown') menuSel = Math.min(Math.max(0, list.length - 1), menuSel + 1);
     else if (e.code === 'Space' && list.length > 0) { if (charmOpen) toggleEquip(list[menuSel]); else buyItem(list[menuSel]); }
@@ -428,7 +448,7 @@ window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 // ---------------- 佈陣（施放序列） ----------------
 function appendCast(elem) {
   if (player.channel) { pushMsg('起陣中，無法再輸入', 1.2); return; }
-  if (player.seq.length >= player.slots) { snd.bad(); pushMsg('陣槽已滿（' + player.slots + ' 格）', 1.5); return; }
+  if (player.seq.length >= effSlots()) { snd.bad(); pushMsg('陣槽已滿（' + effSlots() + ' 格）', 1.5); return; }
   const err = F.checkAppend(player.seq, elem);
   if (err) { snd.bad(); pushMsg(err, 1.6); return; }
   player.seq.push(elem); snd.elem(elem);
@@ -442,8 +462,13 @@ function sealFormation() {
   player.mp -= cost;
   const seq = player.seq.slice();
   player.seq = [];
-  const total = F.castTime(seq.length) * (CH('swift') ? 0.7 : 1); // 迅陣之絡
-  player.channel = { seq, ana: F.analyze(seq), total, t: 0, rot: 0 };
+  let total = F.castTime(seq.length);
+  if (CH('swift')) total *= 0.7;                                       // 迅陣之絡
+  if (CH('way_swift')) total *= (seq.length <= 3 ? 0.55 : 1.3);        // 迅雷道紋
+  if (CH('way_grand') && seq.length <= 2) total *= 1.25;               // 宏淵：短陣變慢
+  const ana = F.analyze(seq);
+  if (CH('way_backlash') && !ana.backlash && ana.bridges.length >= 2) ana.backlash = true; // 噬心：反噬條件放寬
+  player.channel = { seq, ana, total, t: 0, rot: 0 };
   snd.seal();
 }
 
@@ -456,12 +481,26 @@ function fireProjectile(opts) {
     life: 3.5, col: opts.col || F.INFO.fire.color,
   });
 }
-function castEffect(ana) {
+function castEffect(ana, rawLen) {
   const eff = ana.effective;
   const main = eff[0], mod = eff[1] || null;
   let power = 1 + 0.4 * Math.max(0, eff.length - 2);
   if (main === 'fire' && CH('ember')) power *= 1.35;    // 烈焰之核
   if (main === 'water' && CH('spring')) power *= 1.4;   // 泉心佩
+  // 道紋修正
+  if (CH('way_swift')) power *= (rawLen <= 3 ? 1.25 : 0.8);
+  if (CH('way_breaker')) power *= 0.75;
+  if (CH('way_grand')) power *= (rawLen >= 4 ? 1.3 : 0.7);
+  if (CH('way_backlash')) {
+    if (ana.backlash) { // 噬心：反噬陣起陣時釋放衝擊波（自傷為代價）
+      const bl = 18 * (1 + 0.35 * Math.max(0, ana.bridges.length - 1));
+      for (const e of enemies) if (!e.dead && dist2(cx(e), cy(e), cx(player), cy(player)) < 150 * 150) damageEnemy(e, bl, null, 'trap');
+      burst(cx(player), cy(player), '#ff3355', 30, 260, 0.8);
+      shake(5, 0.25); snd.boom();
+      applyPlayerDamage(8, true);
+      pushMsg('反噬衝擊！', 1.3);
+    } else power *= 0.85;
+  }
   const px = cx(player), py = cy(player);
 
   if (main === 'fire') {
@@ -553,6 +592,7 @@ function attemptBreak() {
       t.e.channel = null; t.e.state = 'stun'; t.e.flash = 0.2;
       t.e.stunT = CH('breaker') ? 3.5 : 2.5;       // 破軍之爪：延長暈眩
       t.e.hp -= CH('breaker') ? 35 : 10;           // 破軍之爪：破陣重擊
+      if (CH('way_breaker')) { t.e.weakT = 6; pushMsg('目標陣脈受創——受傷 +30%！', 1.8); } // 斷陣道紋
       if (t.e.hp <= 0) damageEnemy(t.e, 0, null, 'break');
       pushMsg('破陣成功！');
     }
@@ -591,6 +631,7 @@ function applyPlayerDamage(dmg, pierce) {
 function damageEnemy(e, dmg, burn, type) {
   if (e.dead) return;
   if (e.armor && (type === 'proj' || type === 'melee')) dmg *= 0.4; // 盾岩獸：法彈/法杖減傷
+  if (e.weakT > 0) dmg *= 1.3; // 斷陣道紋：破陣後弱化
   e.hp -= dmg; e.flash = 0.15;
   if (burn) e.burn = { dps: burn.dps, t: burn.dur };
   if (e.hp <= 0) {
@@ -610,7 +651,13 @@ function damageEnemy(e, dmg, burn, type) {
 
 // ---------------- 敵人 AI ----------------
 function startEnemyChannel(e, seq) {
-  e.channel = { seq, ana: F.analyze(seq), breakSeq: F.breakSeqOf(seq), built: 1, buildT: 0, phase: 'build', total: F.castTime(seq.length), t: 0, rot: Math.random() * 6 };
+  const slow = CH('way_breaker') ? 1.4 : 1; // 斷陣道紋：敵方窗口變長
+  e.channel = {
+    seq, ana: F.analyze(seq), breakSeq: F.breakSeqOf(seq),
+    built: 1, buildT: 0, phase: 'build',
+    buildEvery: e.buildSpd * (CH('way_breaker') ? 1.3 : 1),
+    total: F.castTime(seq.length) * slow, t: 0, rot: Math.random() * 6,
+  };
   e.state = 'channel';
 }
 function bossChooseSeq(e) {
@@ -698,6 +745,7 @@ function updateEnemy(e, dt) {
   if (e.dead) return;
   e.animT += dt;
   if (e.flash > 0) e.flash -= dt;
+  if (e.weakT > 0) e.weakT -= dt;
   if (e.burn) { e.hp -= e.burn.dps * dt; e.burn.t -= dt; if (e.burn.t <= 0) e.burn = null;
     if (Math.random() < dt * 8) particles.push({ x: e.x + Math.random() * e.w, y: e.y + Math.random() * e.h, vx: 0, vy: -60, life: 0.4, maxLife: 0.4, col: '#ff6238', size: 2.5, grav: 0 });
     if (e.hp <= 0) { damageEnemy(e, 0); return; } }
@@ -821,7 +869,7 @@ function updateEnemy(e, dt) {
     ch.rot += dt * 0.9;
     if (ch.phase === 'build') {
       ch.buildT += dt;
-      if (ch.buildT >= e.buildSpd) {
+      if (ch.buildT >= (ch.buildEvery || e.buildSpd)) {
         ch.buildT = 0;
         if (ch.built < ch.seq.length) { ch.built++; beep(ELEM_FREQ[ch.seq[ch.built - 1]] * 0.75, 0.08, 'triangle', 0.06); }
         if (ch.built >= ch.seq.length) ch.phase = 'window';
@@ -911,7 +959,7 @@ function updatePlayer(dt) {
   if (player.channel) {
     const ch = player.channel;
     ch.t += dt; ch.rot += dt * 1.1;
-    if (ch.t >= ch.total) { castEffect(ch.ana); player.channel = null; }
+    if (ch.t >= ch.total) { castEffect(ch.ana, ch.seq.length); player.channel = null; }
   }
 
   // 近戰判定
@@ -1562,6 +1610,11 @@ function drawEnemy(e) {
     ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(sx, sy - 8, e.w, 4);
     ctx.fillStyle = '#ff5566'; ctx.fillRect(sx, sy - 8, e.w * clamp(e.hp / e.maxHp, 0, 1), 4);
   }
+  if (e.weakT > 0) { // 斷陣弱化標記
+    ctx.fillStyle = 'rgba(200,120,255,' + (0.6 + 0.3 * Math.sin(globalT * 7)) + ')';
+    ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('▼', sx + e.w / 2, sy - 12);
+  }
   // 佈陣圈
   if (e.channel) {
     const ch = e.channel;
@@ -1711,6 +1764,7 @@ function drawHud() {
   };
   if (player.hasWings) badge('翼', '#9dffc8');
   if (player.hasClaw) badge('爪', '#d8c8a8');
+  for (const id of player.equipped) if (CHARM_DEFS[id].way) badge(CHARM_DEFS[id].name[0], '#e8b458'); // 道紋徽章
   // 靈砂
   ctx.save(); ctx.translate(20, 76); ctx.rotate(Math.PI / 4);
   ctx.fillStyle = '#e8d8a0'; ctx.fillRect(-4, -4, 8, 8); ctx.restore();
@@ -1725,15 +1779,18 @@ function drawHud() {
   ctx.textAlign = 'left';
   ctx.fillStyle = '#aeb8e8';
   ctx.fillText('施放陣列（A火 S水 D土 F風 → Space 起陣）', 16, VH - 58);
-  for (let i = 0; i < player.slots; i++) {
+  for (let i = 0; i < effSlots(); i++) {
     const x = 26 + i * 32, y = VH - 34;
     if (i < player.seq.length) drawGlyph(player.seq[i], x, y, 12);
-    else { ctx.strokeStyle = 'rgba(174,184,232,0.4)'; ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.stroke(); }
+    else {
+      ctx.strokeStyle = i >= player.slots ? 'rgba(232,180,88,0.55)' : 'rgba(174,184,232,0.4)'; // 宏淵加成槽以金色標示
+      ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.stroke();
+    }
   }
   if (player.channel) {
     const ch = player.channel;
-    drawBar(16, VH - 16, player.slots * 32, 6, ch.t / ch.total, '#cfd6ff');
-    ctx.fillStyle = '#cfd6ff'; ctx.fillText('施展窗口…', 16 + player.slots * 32 + 8, VH - 10);
+    drawBar(16, VH - 16, effSlots() * 32, 6, ch.t / ch.total, '#cfd6ff');
+    ctx.fillStyle = '#cfd6ff'; ctx.fillText('施展窗口…', 16 + effSlots() * 32 + 8, VH - 10);
   } else if (player.seq.length > 0) {
     // 陣式即時預覽
     const pv = formationPreview(player.seq);
@@ -2005,7 +2062,7 @@ function drawTradeMenu() {
     }
   } else ctx.fillText(head, X2 + W2 - 24, Y2 + 32);
 
-  const list = charmOpen ? Array.from(player.charmsOwned) : SHOP_STOCK;
+  const list = charmOpen ? charmMenuList() : SHOP_STOCK;
   ctx.textAlign = 'left';
   if (list.length === 0) {
     ctx.fillStyle = '#8a93bf';
@@ -2028,9 +2085,9 @@ function drawTradeMenu() {
     ctx.fillText(name, X2 + 44, y);
     ctx.font = '13px "Microsoft JhengHei", sans-serif';
     if (isCharm) {
-      ctx.fillStyle = '#8a7048';
-      ctx.fillText('●'.repeat(def.cost), X2 + 200, y);
-      if (player.equipped.has(id)) { ctx.fillStyle = '#8fe0c0'; ctx.fillText('◆ 裝備中', X2 + 260, y); }
+      ctx.fillStyle = def.way ? '#e8b458' : '#8a7048';
+      ctx.fillText(def.way ? '〔道紋〕' : '●'.repeat(def.cost), X2 + 200, y);
+      if (player.equipped.has(id)) { ctx.fillStyle = '#8fe0c0'; ctx.fillText('◆ 裝備中', X2 + 280, y); }
     } else {
       const owned = item.charm && player.charmsOwned.has(item.charm);
       const soldOut = item.notch && player.notchMax >= 4;

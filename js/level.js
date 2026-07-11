@@ -169,6 +169,9 @@ const Level = (() => {
       { x: 315, floor: 32, type: 'charm', charm: 'siphon' },  // 蝕魂之鎖：走廊C（精英看守）
       { x: 372, floor: 6,  type: 'charm', charm: 'breaker' }, // 破軍之爪：蹬牆井密室
       { x: 326, floor: 32, type: 'charm', charm: 'feather' }, // 輕靈羽：梟主巢穴
+      { x: 209, floor: 32, type: 'charm', charm: 'way_breaker' },  // 斷陣道紋：深層陣殿（頭目一房）
+      { x: 298, floor: 32, type: 'charm', charm: 'way_backlash' }, // 噬心道紋：反噬結界之後
+      { x: 368, floor: 32, type: 'charm', charm: 'way_grand' },    // 宏淵道紋：祖陣迴廊入口
     ],
     npc: { x: 146, floor: 32 },  // 遊商（祭壇室）
     checkpoints: [
