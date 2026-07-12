@@ -165,7 +165,8 @@ function markExplored() {
 let playTime = 0, shakeT = 0, shakeMag = 0, globalT = 0, bossIntroT = 0, goalMsgT = -9;
 let cam = { x: 0, y: 0 };
 let enemies = [], projectiles = [], zones = [], traps = [], blasts = [], particles = [], pickups = [], messages = [];
-let barriers = [], checkpoints = [], signs = [], goal = null, seals = [];
+let barriers = [], checkpoints = [], signs = [], goal = null, seals = [], lore = [];
+let prologueT = 0, prologueShown = false;
 const deadBosses = new Set();   // 已擊殺頭目（跨重生保留）
 let bossIntroData = null;       // 頭目登場卡 {name, sub, img}
 const collected = new Set();
@@ -346,10 +347,23 @@ function makeShell(d) {
     hp: 70, maxHp: 70, speed: 38, touchDmg: 16, armor: true, flash: 0, burn: null, dead: false, animT: Math.random() * 9 };
 }
 const BOSS_DEFS = {
-  b1: { name: '深陣咒主', sub: '深層陣殿之主', img: 'bossPortrait',  hp: 240, touchDmg: 16, buildSpd: 0.38, cool: 1.6, w: 38, h: 54, healAmt: 50 },
-  b2: { name: '疾風梟主', sub: '幽泉水道之王', img: 'boss2Portrait', hp: 300, touchDmg: 14, buildSpd: 0.42, cool: 1.8, w: 46, h: 40, fly: true },
-  b3: { name: '祖陣墟主', sub: '萬陣之源',     img: 'boss3Portrait', hp: 420, touchDmg: 18, buildSpd: 0.34, cool: 1.4, w: 44, h: 60, healAmt: 80 },
+  b1: { name: '深陣咒主', sub: '求不得・守陣人', img: 'bossPortrait',  hp: 240, touchDmg: 16, buildSpd: 0.38, cool: 1.6, w: 38, h: 54, healAmt: 50,
+        quote: '「長生大陣只差一味……誰！誰來偷我的砂！」',
+        deathQuote: '守陣人：「陣、陣成了……怎麼……怎麼還是會死……」' },
+  b2: { name: '疾風梟主', sub: '愛別離・守燈人', img: 'boss2Portrait', hp: 300, touchDmg: 14, buildSpd: 0.42, cool: 1.8, w: 46, h: 40, fly: true,
+        quote: '「燈還亮著……風雪那麼大，你怎麼還不回來……」',
+        deathQuote: '阿鸞：「……是你？……燈，可以熄了……」' },
+  b3: { name: '祖陣墟主', sub: '死・執念之墟',   img: 'boss3Portrait', hp: 420, touchDmg: 18, buildSpd: 0.34, cool: 1.4, w: 44, h: 60, healAmt: 80,
+        quote: '「你終於肯回頭看我了。」',
+        deathQuote: '墟主：「放下了。……雪，不冷了。」' },
 };
+// 遊商對話（隨擊殺頭目數推進——他就是當年賣出殘卷的人）
+const MERCHANT_LINES = [
+  '「客倌可要靈砂換寶？……老朽在此行商很久了，久到記不得是先有這泥犁，還是先有老朽的攤子。」',
+  '「守陣人死了？他當年向老朽買下那半卷殘書時，眼裡的火，和你現在一模一樣。……都是老朽造的孽啊。」',
+  '「梟也安息了……那盞燈，她點了三千個夜。客倌，你究竟是誰？為何老朽看你，像看一位故人？」',
+  '「……原來如此。去吧，去見最後的自己。老朽會留在這裡，繼續償還。」',
+];
 function makeBoss(d) {
   const B = BOSS_DEFS[d.id];
   return { kind: 'boss', id: d.id, name: B.name, sub: B.sub, img: B.img, fly: !!B.fly,
@@ -373,6 +387,7 @@ function initWorld() {
   barriers = L.spawns.barriers.map(b => ({ ...b, breakSeq: F.breakSeqOf(b.seq), ana: F.analyze(b.seq), broken: false, rot: Math.random() * 6 }));
   checkpoints = L.spawns.checkpoints.map(c => ({ x: c.x * TILE, y: c.floor * TILE, lit: false }));
   signs = L.spawns.signs.map(s => ({ x: s.x * TILE + 16, y: s.floor * TILE, text: s.text }));
+  lore = L.spawns.lore.map(l => ({ x: l.x * TILE + 16, y: l.floor * TILE, ku: l.ku, title: l.title, text: l.text, read: false }));
   goal = { x: L.spawns.goal.x * TILE, y: L.spawns.goal.floor * TILE };
   pickups = L.spawns.pickups.map((p, i) => ({ id: 'p' + i, type: p.type, x: p.x * TILE + 16, y: p.floor * TILE - 22, vy: 0, bob: Math.random() * 6 }))
     .filter(p => !collected.has(p.id));
@@ -404,7 +419,12 @@ window.addEventListener('keydown', (e) => {
   if (e.repeat) { keys[e.code] = true; return; }
   keys[e.code] = true;
 
-  if (state === 'title') { if (AC === null) beep(1, 0.01, 'sine', 0.001); state = 'play'; return; }
+  if (state === 'title') {
+    if (AC === null) beep(1, 0.01, 'sine', 0.001);
+    state = 'play';
+    if (!prologueShown) { prologueShown = true; prologueT = 8; }
+    return;
+  }
   if (state === 'dead') { if (e.code === 'KeyR') respawn(); return; }
   if (state === 'victory') return;
 
@@ -642,7 +662,8 @@ function damageEnemy(e, dmg, burn, type) {
     if (CH('siphon')) player.hp = clamp(player.hp + 8, 0, player.maxHp); // 蝕魂之鎖
     if (e.kind === 'boss') {
       deadBosses.add(e.id);
-      pushMsg(e.id === 'b3' ? '祖陣墟主已滅——歸環之門開啟！' : e.name + '已滅——封印崩解！', 3.5);
+      pushMsg(BOSS_DEFS[e.id].deathQuote, 5.5); // 臨終之言
+      if (e.id === 'b3') pushMsg('執念散盡——歸環之門開啟', 3.5);
       shake(8, 0.6);
       burst(cx(e), cy(e), '#c080ff', 60, 300, 1.4);
     }
@@ -834,7 +855,7 @@ function updateEnemy(e, dt) {
   const inRange = Math.abs(cx(player) - cx(e)) < 460 && Math.abs(cy(player) - cy(e)) < 220 && !player.dead;
   if (e.kind === 'boss') {
     if (!e.aggro && !player.dead && player.x > e.aggroX && Math.abs(cx(player) - cx(e)) < 560) {
-      e.aggro = true; bossIntroT = 3.2; bossIntroData = { name: e.name, sub: e.sub, img: e.img };
+      e.aggro = true; bossIntroT = 4; bossIntroData = { name: e.name, sub: e.sub, img: e.img, quote: BOSS_DEFS[e.id].quote };
       pushMsg(e.name + '現身！', 2.5);
     }
     if (flyingNow) { // 疾風梟主：懸浮追蹤
@@ -1386,6 +1407,22 @@ function drawSignsPickupsGoal() {
       }
     }
   }
+  // 殘篇魂燈（青白色魂火，讀過轉暗）
+  for (const l of lore) {
+    const sx = l.x - cam.x, sy = l.y - cam.y;
+    if (sx < -40 || sx > VW + 40) continue;
+    const fl = 5 + Math.sin(globalT * 4 + l.x) * 1.5;
+    ctx.save();
+    ctx.globalAlpha = l.read ? 0.45 : 0.9;
+    ctx.fillStyle = '#bfe3ff';
+    ctx.beginPath(); ctx.ellipse(sx, sy - 22 + Math.sin(globalT * 2 + l.x) * 3, fl * 0.6, fl, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(191,227,255,0.25)';
+    ctx.beginPath(); ctx.arc(sx, sy - 22, fl * 2.4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = l.read ? 'rgba(191,227,255,0.5)' : '#e8f4ff';
+    ctx.font = 'bold 10px "Microsoft JhengHei", sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(l.ku, sx, sy - 34);
+    ctx.restore();
+  }
   { // 遊商
     const n = L.spawns.npc;
     const sx = n.x * TILE + 16 - cam.x, sy = n.floor * TILE - cam.y;
@@ -1721,6 +1758,27 @@ function drawSignPanels() {
   }
   ctx.textBaseline = 'alphabetic';
 }
+function drawLorePanels() {
+  ctx.font = '14px "Microsoft JhengHei", sans-serif';
+  for (const l of lore) {
+    if (Math.abs(cx(player) - l.x) > 60 || Math.abs(player.y + player.h - l.y) > 80) continue;
+    l.read = true;
+    const lines = wrapText(l.text, 384);
+    const w = 420, h = lines.length * 21 + 44;
+    const px = clamp(l.x - cam.x - w / 2, 8, VW - w - 8);
+    const py = clamp(l.y - cam.y - 70 - h, 8, VH - h - 8);
+    ctx.fillStyle = 'rgba(16,8,10,0.92)';
+    ctx.strokeStyle = '#bfe3ff'; ctx.lineWidth = 1;
+    ctx.fillRect(px, py, w, h); ctx.strokeRect(px, py, w, h);
+    ctx.fillStyle = '#bfe3ff'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.font = 'bold 15px "Microsoft JhengHei", serif';
+    ctx.fillText('◈ ' + l.title, px + 14, py + 10);
+    ctx.font = '14px "Microsoft JhengHei", sans-serif';
+    ctx.fillStyle = '#e6dcc8';
+    lines.forEach((ln, i) => ctx.fillText(ln, px + 14, py + 36 + i * 21));
+  }
+  ctx.textBaseline = 'alphabetic';
+}
 // 陣式名稱表（主效果,修飾 → 名稱）
 const FORMATION_NAMES = {
   'fire,water': '延燒', 'fire,earth': '火種', 'fire,wind': '追蹤火球',
@@ -1893,10 +1951,29 @@ function drawOverlay() {
     ctx.fillText(ln[1], 500, 92 + i * 24);
   });
 }
+function drawPrologue() {
+  const a = clamp(prologueT > 6.8 ? (8 - prologueT) / 1.2 : prologueT / 2.2, 0, 1);
+  ctx.save();
+  ctx.globalAlpha = a * 0.75;
+  ctx.fillStyle = '#05040c';
+  ctx.fillRect(0, 0, VW, VH);
+  ctx.globalAlpha = a;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#cfd8ec';
+  ctx.font = '20px "Microsoft JhengHei", serif';
+  ctx.fillText('雪峰之上，採藥人闔上了眼。', VW / 2, VH / 2 - 26);
+  ctx.fillStyle = '#8fa4c8';
+  ctx.font = '17px "Microsoft JhengHei", serif';
+  ctx.fillText('一念清明，墜入泥犁。', VW / 2, VH / 2 + 14);
+  ctx.globalAlpha = a * 0.6;
+  ctx.font = '13px "Microsoft JhengHei", sans-serif';
+  ctx.fillText('——沿途的魂燈，記著一切的因果。', VW / 2, VH / 2 + 52);
+  ctx.restore();
+}
 function drawBossIntro() {
   if (!bossIntroData) return;
-  const appear = clamp((3.2 - bossIntroT) * 3, 0, 1); // 進場
-  const fade = clamp(bossIntroT * 1.5, 0, 1);         // 收場淡出
+  const appear = clamp((4 - bossIntroT) * 3, 0, 1); // 進場
+  const fade = clamp(bossIntroT * 1.5, 0, 1);       // 收場淡出
   const alpha = Math.min(appear, fade);
   const slide = (1 - appear) * 130;
   ctx.save();
@@ -1916,6 +1993,10 @@ function drawBossIntro() {
   ctx.fillText('—— ' + bossIntroData.sub + ' ——', px - 16, VH / 2 - 14);
   ctx.fillStyle = '#c080ff'; ctx.font = 'bold 34px "Microsoft JhengHei", sans-serif';
   ctx.fillText(bossIntroData.name.split('').join(' '), px - 16, VH / 2 + 22);
+  if (bossIntroData.quote) {
+    ctx.fillStyle = '#d8c8e8'; ctx.font = '14px "Microsoft JhengHei", serif';
+    ctx.fillText(bossIntroData.quote, px - 16, VH / 2 + 52);
+  }
   ctx.restore();
 }
 function rr(x, y, w, h, r) { // 圓角矩形路徑
@@ -2095,6 +2176,13 @@ function drawTradeMenu() {
       ctx.fillText(owned ? '已擁有' : soldOut ? '售罄' : '◈ ' + item.price, X2 + 300, y);
     }
   });
+  // 遊商絮語（隨劇情推進）
+  if (shopOpen) {
+    ctx.font = '12px "Microsoft JhengHei", serif';
+    ctx.fillStyle = '#b8a888';
+    const mline = MERCHANT_LINES[Math.min(deadBosses.size, MERCHANT_LINES.length - 1)];
+    wrapText(mline, W2 - 48).slice(0, 2).forEach((ln, i) => ctx.fillText(ln, X2 + 24, Y2 + H2 - 100 + i * 17));
+  }
   // 說明與操作提示
   ctx.fillStyle = '#aeb8e8';
   ctx.font = '13px "Microsoft JhengHei", sans-serif';
@@ -2138,16 +2226,36 @@ function drawScreens() {
     ctx.font = '16px "Microsoft JhengHei", sans-serif';
     ctx.fillText('按 R 於祭壇重生', VW / 2, VH / 2 + 24);
   } else if (state === 'victory') {
-    ctx.fillStyle = 'rgba(8,7,18,0.8)'; ctx.fillRect(0, 0, VW, VH);
+    ctx.fillStyle = 'rgba(5,4,12,0.92)'; ctx.fillRect(0, 0, VW, VH);
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffe08a';
-    ctx.font = 'bold 44px "Microsoft JhengHei", sans-serif';
-    ctx.fillText('陣 成 ・ 通 關', VW / 2, VH / 2 - 30);
-    ctx.fillStyle = '#dfe6ff';
-    ctx.font = '16px "Microsoft JhengHei", sans-serif';
+    ctx.font = 'bold 36px "Microsoft JhengHei", serif';
+    ctx.fillText('回　首', VW / 2, 96);
+    ctx.font = '16px "Microsoft JhengHei", serif';
+    const endLines = [
+      ['陣環崩解，行者回首——來路即一生：', '#dfe6ff'],
+      ['生於雪夜，老於柴門，病於疫村，死於峰頂；', '#c8d0e8'],
+      ['與所愛別離，與所怨相會，所求終不得，', '#c8d0e8'],
+      ['而揹著這一切走完全程的，是這副燒著的身心。', '#c8d0e8'],
+      ['', ''],
+      ['八苦即八陣，人間宛如泥犁。', '#ffe08a'],
+      ['——既已看盡，便可放下。', '#ffe08a'],
+      ['', ''],
+      ['雪，停了。', '#ffffff'],
+    ];
+    endLines.forEach((ln, i) => {
+      if (!ln[0]) return;
+      ctx.fillStyle = ln[1];
+      ctx.font = (i >= 5 ? 'bold ' : '') + (i === 8 ? '22px' : '16px') + ' "Microsoft JhengHei", serif';
+      ctx.fillText(ln[0], VW / 2, 150 + i * 32);
+    });
+    const readCount = lore.filter(l => l.read).length;
+    ctx.fillStyle = '#8fa4c8';
+    ctx.font = '14px "Microsoft JhengHei", sans-serif';
     const mm = Math.floor(playTime / 60), ss = Math.floor(playTime % 60);
-    ctx.fillText('用時 ' + mm + ' 分 ' + (ss < 10 ? '0' : '') + ss + ' 秒', VW / 2, VH / 2 + 16);
-    ctx.fillText('（重新整理頁面可再來一次）', VW / 2, VH / 2 + 46);
+    ctx.fillText('殘篇 ' + readCount + '／8　・　用時 ' + mm + ' 分 ' + (ss < 10 ? '0' : '') + ss + ' 秒', VW / 2, VH - 72);
+    if (readCount < 8) ctx.fillText('（尚有魂燈未曾點讀——泥犁裡還藏著誰的因果？）', VW / 2, VH - 48);
+    else ctx.fillText('八苦俱足。你已看盡了一生。', VW / 2, VH - 48);
   } else if (paused) {
     ctx.fillStyle = 'rgba(8,7,18,0.6)'; ctx.fillRect(0, 0, VW, VH);
     ctx.textAlign = 'center';
@@ -2184,9 +2292,11 @@ function render() {
   ctx.globalAlpha = 1;
   if (state === 'play' && (player.breakMode || player.breakSeq.length > 0)) drawBreakReticle();
   drawSignPanels();
+  drawLorePanels();
   ctx.restore();
   if (state !== 'title') drawHud();
   if (state === 'play' && bossIntroT > 0) drawBossIntro();
+  if (state === 'play' && prologueT > 0) drawPrologue();
   if (overlayOpen && state === 'play') drawOverlay();
   if (mapOpen && state === 'play') drawMap();
   if ((charmOpen || shopOpen) && state === 'play') drawTradeMenu();
@@ -2201,6 +2311,7 @@ function frame(now) {
   lastTime = now;
   globalT += dt;
   if (bossIntroT > 0) bossIntroT -= dt;
+  if (prologueT > 0) prologueT -= dt;
   // 環境音樂：進入遊戲即啟動，依區域/戰鬥切換氛圍
   if (state === 'play') {
     Music.ensure();
